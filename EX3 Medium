@@ -1,0 +1,39 @@
+1. Total Hamming Distance
+
+int totalHammingDistance(int* nums, int numsSize) {
+    int total_distance = 0;
+    for (int i = 0; i < 32; i++) {
+        int count_ones = 0;
+        for (int j = 0; j < numsSize; j++) {
+            if ((nums[j] >> i) & 1) {
+                count_ones++;
+            }
+        }
+        int count_zeros = numsSize - count_ones;
+        total_distance += count_ones * count_zeros;
+    }
+    return total_distance;
+}
+
+2. Bit Manipulation: Lonely Integer
+
+#include <iostream>
+#include <vector>
+int findLonely(const std::vector<int>& arr) {
+    int lonely_integer = 0;
+    for (int num : arr) {
+        lonely_integer ^= num;
+    }
+    return lonely_integer;
+}
+int main() {
+    int n;
+    if (std::cin >> n) {
+        std::vector<int> arr(n);
+        for (int i = 0; i < n; ++i) {
+            std::cin >> arr[i];
+        }
+        std::cout << findLonely(arr) << std::endl;
+    }
+    return 0;
+}
