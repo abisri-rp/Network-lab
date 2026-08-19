@@ -1,0 +1,518 @@
+HAMMING CODE SENDER
+
+#include <stdio.h>
+#include <string.h>
+void readFileAndConvertToBinary(char inputBinary[],
+                                int message[],
+                                int *messageLength)
+{
+    FILE *fp;
+    char text[200];
+    int index = 0;
+    int i;
+    int j;
+    int bit;
+    unsigned char ch;
+    fp = fopen("data.txt", "r");
+    if (fp == NULL)
+    {
+        printf("Unable to open input.txt\n");
+        return;
+    }
+    fgets(text, sizeof(text), fp);
+    fclose(fp);
+    text[strcspn(text, "\n")] = '\0';
+    printf("\nInput String : %s\n", text);
+    for (i = 0; text[i] != '\0'; i++)
+    {
+        printf("%d ", text[i]);
+    }
+    printf("\n");
+    printf("\nBinary Conversion\n");
+    for (i = 0; text[i] != '\0'; i++)
+    {
+        ch = text[i];
+        printf("%c -> ", ch);
+        for (j = 7; j >= 0; j--)
+        {
+            bit = (ch >> j) & 1;
+            inputBinary[index] = bit + '0';
+            message[index] = bit;
+            printf("%d", bit);
+            index++;
+        }
+        printf("\n");
+    }
+    inputBinary[index] = '\0';
+    *messageLength = index;
+    printf("\nComplete Binary Data : %s\n", inputBinary);
+    printf("Total Data Bits : %d\n", *messageLength);
+}
+int calculateParityBits(int messageLength)
+{
+    int parityCount = 0;
+    while ((1 << parityCount) < (messageLength + parityCount + 1))
+    {
+        parityCount++;
+    }
+    return parityCount;
+}
+void generateHammingCode(int message[],
+                         int messageLength,
+                         int parityCount,
+                         int hamming[])
+{
+    int totalLength;
+    int pointer;
+    int position;
+    int bit;
+    int parityPosition;
+    int ones;
+    totalLength = messageLength + parityCount;
+    pointer = messageLength - 1;
+    printf("       HAMMING CODE GENERATION\n");
+    printf("\nStep 1 : Place Data Bits\n");
+    for (position = 1; position <= totalLength; position++)
+    {
+        if ((position & (position - 1)) == 0)
+        {
+            hamming[position] = 0;
+        }
+        else
+        {
+            hamming[position] = message[pointer];
+            pointer--;
+        }
+    }
+    printf("\nPosition : ");
+    for (position = totalLength; position >= 1; position--)
+    {
+        printf("%2d ", position);
+    }
+    printf("\nBits     : ");
+    for (position = totalLength; position >= 1; position--)
+    {
+        if ((position & (position - 1)) == 0)
+        {
+            printf(" P ");
+        }
+        else
+        {
+            printf(" %d ", hamming[position]);
+        }
+    }
+    printf("\n");
+    printf("\nStep 2 : Calculate Parity Bits (Even Parity)\n");
+    for (bit = 0; bit < parityCount; bit++)
+    {
+        parityPosition = 1 << bit;
+        ones = 0;
+        printf("Calculating P%d\n", parityPosition);
+        printf("Positions Checked : ");
+        for (position = 1; position <= totalLength; position++)
+        {
+            if ((position & parityPosition) && position != parityPosition)
+            {
+                printf("%d ", position);
+                ones += hamming[position];
+            }
+        }
+        hamming[parityPosition] = ones % 2;
+        printf("\nNumber of 1's : %d", ones);
+        printf("\nP%d = %d\n", parityPosition, hamming[parityPosition]);
+    }
+    printf("\n---------------------------------\n");
+    printf("\nStep 3 : Final Hamming Code\n");
+    printf("Position : ");
+    for (position = totalLength; position >= 1; position--)
+    {
+        printf("%2d ", position);
+    }
+    printf("\nCode     : ");
+    for (position = totalLength; position >= 1; position--)
+    {
+        printf(" %d ", hamming[position]);
+    }
+    printf("\n");
+}
+/* Display Final Result */
+void displayResult(int messageLength,
+                   int parityCount,
+                   int hamming[])
+{
+    int totalLength;
+    int position;
+
+    totalLength = messageLength + parityCount;
+
+    printf("\n=========================================\n");
+    printf("              RESULT\n");
+    printf("=========================================\n");
+
+    printf("Data Bits        : %d\n", messageLength);
+    printf("Parity Bits      : %d\n", parityCount);
+    printf("Total Code Bits  : %d\n", totalLength);
+
+    printf("\nGenerated Hamming Code : ");
+
+    for (position = totalLength; position >= 1; position--)
+    {
+        printf("%d", hamming[position]);
+    }
+
+    printf("\n");
+}
+
+/* Save Hamming Code into File */
+void saveToFile(int messageLength,
+                int parityCount,
+                int hamming[])
+{
+    FILE *channel;
+
+    int totalLength;
+    int position;
+
+    totalLength = messageLength + parityCount;
+
+    channel = fopen("channel.txt", "w");
+
+    if (channel == NULL)
+    {
+        printf("Unable to create channel.txt\n");
+        return;
+    }
+
+    fprintf(channel, "%d\n", messageLength);
+    fprintf(channel, "%d\n", parityCount);
+
+    for (position = totalLength; position >= 1; position--)
+    {
+        fprintf(channel, "%d", hamming[position]);
+    }
+
+    fprintf(channel, "\n");
+
+    fclose(channel);
+}
+int main()
+{
+    char inputBinary[50];
+    int message[50];
+    int hamming[50+ 1] = {0};
+    int messageLength;
+    int parityCount;
+    printf("         HAMMING CODE SENDER\n");
+    readFileAndConvertToBinary(inputBinary, message, &messageLength);
+    parityCount = calculateParityBits(messageLength);
+    generateHammingCode(message, messageLength, parityCount, hamming);
+    displayResult(messageLength, parityCount, hamming);
+    saveToFile(messageLength, parityCount, hamming);
+    return 0;
+}
+
+HAMMING CODE RECEIVER
+
+
+#include <stdio.h>
+#include <string.h>
+int flippedBits=0;
+void readChannelFile(int *dataLength,
+                     int *parityBits,
+                     char receivedCode[])
+{
+    FILE *fp;
+
+    fp = fopen("output.txt", "r");
+
+    if (fp == NULL)
+    {
+        printf("Unable to open output.txt\n");
+        return;
+    }
+
+    fscanf(fp, "%d", dataLength);
+    fscanf(fp, "%d", parityBits);
+    fscanf(fp, "%s", receivedCode);
+
+    fclose(fp);
+}
+
+/* Convert received string into integer array */
+void convertToArray(char receivedCode[],
+                    int hamming[],
+                    int totalBits)
+{
+    int length;
+    int i;
+
+    length = strlen(receivedCode);
+
+    for (i = 0; i < length; i++)
+    {
+        hamming[length - i] = receivedCode[i] - '0';
+    }
+}
+
+/* Simulate transmission error */
+void simulateError(int hamming[],
+                   int totalBits)
+{
+    char option;
+    int flipPosition;
+    int i;
+
+    printf("\nSimulate transmission error? (Y/N): ");
+
+    scanf(" %c", &option);
+
+    if (option == 'Y' || option == 'y')
+    {
+        printf("No of bits to flip : ");
+
+        scanf("%d", &flippedBits);
+
+        for (i = 0; i <flippedBits; i++)
+        {
+            while (1)
+            {
+                printf("Enter bit position to flip (1-%d): ",
+                       totalBits);
+
+                scanf("%d", &flipPosition);
+
+                if (flipPosition >= 1 &&
+                    flipPosition <= totalBits)
+                {
+                    break;
+                }
+
+                printf("Invalid Position!\n");
+            }
+
+            hamming[flipPosition] ^= 1;
+
+            printf("Bit %d has been flipped.\n",
+                   flipPosition);
+        }
+    }
+}
+/* Display Received Hamming Code */
+void displayCode(int hamming[], int totalBits)
+{
+    int i;
+
+    for (i = totalBits; i >= 1; i--)
+    {
+        printf("%d", hamming[i]);
+    }
+
+    printf("\n");
+}
+
+/* Detect Error */
+int detectError(int hamming[],
+                int totalBits,
+                int parityBits)
+{
+    int errorPosition;
+    int i;
+    int j;
+    int parityPosition;
+    int ones;
+
+    errorPosition = 0;
+
+    printf("\n=========================================\n");
+    printf("         ERROR DETECTION\n");
+    printf("=========================================\n");
+
+    for (i = 0; i < parityBits; i++)
+    {
+        parityPosition = 1 << i;
+
+        ones = 0;
+
+        printf("\nChecking P%d\n", parityPosition);
+
+        printf("Positions : ");
+
+        for (j = 1; j <= totalBits; j++)
+        {
+            if (j & parityPosition)
+            {
+                printf("%d ", j);
+            }
+        }
+
+        printf("\nBits      : ");
+
+        for (j = 1; j <= totalBits; j++)
+        {
+            if (j & parityPosition)
+            {
+                printf("%d ", hamming[j]);
+
+                ones += hamming[j];
+            }
+        }
+
+        if (ones % 2 == 0)
+        {
+            printf("\nP%d = 0 (PASS)\n",
+                   parityPosition);
+        }
+        else
+        {
+            printf("\nP%d = 1 (FAIL)\n",
+                   parityPosition);
+
+            errorPosition += parityPosition;
+        }
+    }
+
+    printf("\n-----------------------------------------\n");
+
+    printf("Syndrome (Binary) : ");
+
+    for (i = parityBits - 1; i >= 0; i--)
+    {
+        printf("%d",
+               (errorPosition >> i) & 1);
+    }
+
+    printf("\n");
+
+    printf("Syndrome (Decimal): %d\n",
+           errorPosition);
+
+    printf("-----------------------------------------\n");
+
+    return errorPosition;
+}
+
+/* Correct Error */
+void correctError(int hamming[],
+                  int totalBits,
+                  int errorPosition)
+{
+    hamming[errorPosition] ^= 1;
+
+    printf("\nError Corrected Successfully.\n");
+}
+/* Display Recovered Binary Data and Original String */
+void displayOriginalData(int hamming[], int totalBits)
+{
+    int binary[50];
+
+    int index;
+    int i;
+    int j;
+    int value;
+
+    index = 0;
+
+    printf("Recovered Binary Data : ");
+
+    /* Extract only data bits */
+    for (i = totalBits; i >= 1; i--)
+    {
+        if ((i & (i - 1)) != 0)
+        {
+            printf("%d", hamming[i]);
+
+            binary[index] = hamming[i];
+
+            index++;
+        }
+    }
+
+    printf("\n");
+
+    printf("Recovered String      : ");
+
+    /* Convert every 8 bits into one ASCII character */
+    for (i = 0; i < index; i += 8)
+    {
+        value = 0;
+
+        for (j = 0; j < 8; j++)
+        {
+            value = (value << 1) | binary[i + j];
+        }
+
+        printf("%c", value);
+    }
+
+    printf("\n");
+}
+int main()
+{
+    int dataLength = 0;
+    int parityBits = 0;
+    int totalBits;
+    int errorPosition;
+
+    char receivedCode[50] = "";
+
+    int hamming[50] = {0};
+
+    printf("=========================================\n");
+    printf("        HAMMING CODE RECEIVER\n");
+    printf("=========================================\n");
+
+    readChannelFile(&dataLength,
+                    &parityBits,
+                    receivedCode);
+
+    totalBits = dataLength + parityBits;
+
+    convertToArray(receivedCode,
+                   hamming,
+                   totalBits);
+
+    simulateError(hamming,
+                  totalBits);
+
+    printf("\nReceived Hamming Code : ");
+    displayCode(hamming,
+                totalBits);
+
+    errorPosition = detectError(hamming,
+                            totalBits,
+                            parityBits);
+
+if (errorPosition == 0)
+{
+    printf("\nNo transmission error detected.\n");
+
+    printf("\nRecovered Message\n");
+    displayOriginalData(hamming, totalBits);
+}
+else if (flippedBits == 1)
+{
+    printf("\nSingle-bit error detected.\n");
+    printf("Error detected at bit position %d.\n",
+           errorPosition);
+
+    correctError(hamming,
+                 totalBits,
+                 errorPosition);
+
+    printf("\nCorrected Hamming Code : ");
+    displayCode(hamming,
+                totalBits);
+
+    printf("\nRecovered Message\n");
+    displayOriginalData(hamming,
+                        totalBits);
+}
+else
+{
+    printf("\nMultiple-bit errors detected.\n");
+    printf("Hamming Code can correct only one bit.\n");
+    printf("Message cannot be recovered.\n");
+}
+
+return 0;
+}
