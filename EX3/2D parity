@@ -1,0 +1,402 @@
+2D PARITY SENDER
+
+#include <stdio.h>
+#include <string.h>
+#define MAX_SIZE 64
+#define BIT_COUNT 8
+void getMessage(char message[], int *length)
+{
+    FILE *input = fopen("data.txt", "r");
+
+    if (input == NULL)
+    {
+        printf("Error: Unable to open data.txt\n");
+        *length = 0;
+        return;
+    }
+
+    if (fgets(message, MAX_SIZE, input) == NULL)
+    {
+        printf("Error: data.txt is empty.\n");
+        fclose(input);
+        *length = 0;
+        return;
+    }
+
+    fclose(input);
+
+    *length = strlen(message);
+
+    while (*length > 0 &&
+          (message[*length - 1] == '\n' || message[*length - 1] == '\r'))
+    {
+        message[*length - 1] = '\0';
+        (*length)--;
+    }
+
+    if (*length == 0)
+    {
+        printf("Error: Input cannot be empty.\n");
+    }
+}
+void generateParityMatrix(char message[], int length, int parityMatrix[][BIT_COUNT + 1])
+{
+    int row, column;
+    for (row = 0; row < length; row++)
+    {
+        unsigned char currentChar = (unsigned char)message[row];
+        int oneCount = 0;
+        for (column = 0; column < BIT_COUNT; column++)
+        {
+            int bit = (currentChar >> (7 - column)) & 1;
+            parityMatrix[row][column] = bit;
+            if (bit == 1)
+                oneCount++;
+        }
+        parityMatrix[row][BIT_COUNT] = oneCount % 2;
+    }
+    for (column = 0; column <= BIT_COUNT; column++)
+    {
+        int oneCount = 0;
+        for (row = 0; row < length; row++)
+        {
+            if (parityMatrix[row][column] == 1)
+                oneCount++;
+        }
+        parityMatrix[length][column] = oneCount % 2;
+    }
+}
+void displayMatrix(char message[], int length, int parityMatrix[][BIT_COUNT + 1])
+{
+    int row, column;
+    printf("\nGenerated 2D Parity Matrix\n\n");
+    printf("Char   | Data Bits (8-bit) | Row Parity\n");
+    printf("--------------------------------------\n");
+    for (row = 0; row < length; row++)
+    {
+        printf("  %c    | ", message[row]);
+        for (column = 0; column < BIT_COUNT; column++)
+        {
+            printf("%d ", parityMatrix[row][column]);
+        }
+        printf("|     %d\n", parityMatrix[row][BIT_COUNT]);
+    }
+    printf("--------------------------------------\n");
+    printf("ColPar | ");
+    for (column = 0; column < BIT_COUNT; column++)
+    {
+        printf("%d ", parityMatrix[length][column]);
+    }
+    printf("|     %d (Corner Parity)\n",
+           parityMatrix[length][BIT_COUNT]);
+}
+void saveMatrixToFile(int length, int parityMatrix[][BIT_COUNT + 1])
+{
+    FILE *output = fopen("outmat.txt", "w");
+    if (output == NULL)
+    {
+        printf("File not created\n");
+        return;
+    }
+    fprintf(output, "Rows = %d\n", length);
+    fprintf(output, "Cols = %d\n", BIT_COUNT);
+    fprintf(output, "Matrix:\n");
+    int row,column;
+    for (row = 0; row <= length; row++)
+    {
+        for (column = 0; column <= BIT_COUNT; column++)
+        {
+            fprintf(output, "%d", parityMatrix[row][column]);
+        }
+        fprintf(output, "\n");
+    }
+    fclose(output);
+}
+int main()
+{
+    char message[MAX_SIZE];
+    int length;
+    int parityMatrix[MAX_SIZE + 1][BIT_COUNT + 1];
+    printf("2D PARITY SENDER        \n");
+    getMessage(message, &length);
+    generateParityMatrix(message, length, parityMatrix);
+    displayMatrix(message, length, parityMatrix);
+    saveMatrixToFile(length, parityMatrix);
+    return 0;
+}
+
+2D PARITY RECEIVER
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define MAX_SIZE 64
+#define BIT_SIZE 8
+void readMatrixFile(int matrix[][BIT_SIZE + 1],int *rowCount,int *columnCount)
+{
+    FILE *inputFile = fopen("outmat.txt", "r");
+    if (inputFile == NULL)
+    {
+        printf("File not found\n");
+        return;
+    }
+    char buffer[128];
+    while (fgets(buffer, sizeof(buffer), inputFile))
+    {
+        if (strstr(buffer, "Rows ="))
+        {
+            sscanf(buffer, "Rows = %d", rowCount);
+        }
+        else if (strstr(buffer, "Cols ="))
+        {
+            sscanf(buffer, "Cols = %d", columnCount);
+        }
+        else if (strstr(buffer, "Matrix:"))
+        {
+            break;
+        }
+    }
+    int row,column;
+    for (row = 0; row <= *rowCount; row++)
+    {
+        fgets(buffer, sizeof(buffer), inputFile);
+        buffer[strcspn(buffer, "\r\n")] = '\0';
+        for (column = 0; column <= *columnCount; column++)
+        {
+            matrix[row][column] = buffer[column] - '0';
+        }
+    }
+    fclose(inputFile);
+}
+void displayMatrix(int matrix[][BIT_SIZE + 1],int rowCount,int columnCount)
+{
+    printf("\nMatrix Size : %d x %d\n\n",rowCount + 1,columnCount + 1);
+    printf("Received Matrix\n\n");
+    int row,column;
+    for (row = 0; row <= rowCount; row++)
+    {
+        for (column = 0; column <= columnCount; column++)
+        {
+            printf("%d ", matrix[row][column]);
+        }
+        printf("\n");
+    }
+}
+void simulateError(int matrix[][BIT_SIZE + 1],
+                   int rowCount,
+                   int columnCount)
+{
+    char choice;
+    printf("\nDo you want to simulate transmission error? (Y/N): ");
+    scanf(" %c", &choice);
+    if (choice == 'Y' || choice == 'y')
+    {
+        int flipCount;
+        printf("Enter number of bits to flip: ");
+        scanf("%d", &flipCount);
+        int i;
+        for (i = 1; i <= flipCount; i++)
+        {
+            int row;
+            int column;
+            while (1)
+            {
+                printf("\nFlip %d\n", i);
+
+                printf("Enter Row (1-%d): ", rowCount + 1);
+                scanf("%d", &row);
+
+                if (row >= 1 && row <= rowCount + 1)
+                    break;
+
+                printf("Invalid Row!\n");
+            }
+
+            while (1)
+            {
+                printf("Enter Column (1-%d): ", columnCount + 1);
+                scanf("%d", &column);
+
+                if (column >= 1 && column <= columnCount + 1)
+                    break;
+
+                printf("Invalid Column!\n");
+            }
+
+            matrix[row - 1][column - 1] ^= 1;
+
+            printf("Bit flipped at [%d][%d]\n",
+                   row,
+                   column);
+        }
+    }
+}
+void recalculateParity(int matrix[][BIT_SIZE + 1],
+                       int rowCount,
+                       int columnCount,
+                       int rowParity[],
+                       int columnParity[],
+                       int *cornerParity)
+{
+    int oneCount;
+    int row,column;
+    for (row = 0; row < rowCount; row++)
+    {
+        oneCount = 0;
+
+        for (column = 0; column < columnCount; column++)
+        {
+            if (matrix[row][column] == 1)
+            {
+                oneCount++;
+            }
+        }
+
+        rowParity[row] = (oneCount % 2 == 0) ? 0 : 1;
+    }
+
+    /* Column Parity */
+    for (column = 0; column < columnCount; column++)
+    {
+        oneCount = 0;
+
+        for (row = 0; row < rowCount; row++)
+        {
+            if (matrix[row][column] == 1)
+            {
+                oneCount++;
+            }
+        }
+
+        columnParity[column] = (oneCount % 2 == 0) ? 0 : 1;
+    }
+
+    oneCount = 0;
+
+    for (column = 0; column < columnCount; column++)
+    {
+        if (columnParity[column] == 1)
+        {
+            oneCount++;
+        }
+    }
+
+    *cornerParity = (oneCount % 2 == 0) ? 0 : 1;
+}
+void displayRecalculatedParity(int matrix[][BIT_SIZE + 1],
+                               int rowCount,
+                               int columnCount,
+                               int rowParity[],
+                               int columnParity[],
+                               int cornerParity)
+{
+    printf("\nMatrix with Recalculated Parity Bits\n\n");
+    int row,column;
+    for (row = 0; row < rowCount; row++)
+    {
+        for (column = 0; column < columnCount; column++)
+        {
+            printf("%d ", matrix[row][column]);
+        }
+
+        printf("%d\n", rowParity[row]);
+    }
+
+    for (column = 0; column < columnCount; column++)
+    {
+        printf("%d ", columnParity[column]);
+    }
+
+    printf("%d\n\n", cornerParity);
+}
+void checkParity(int matrix[][BIT_SIZE + 1],
+                 int rowCount,
+                 int columnCount,
+                 int rowParity[],
+                 int columnParity[],
+                 int cornerParity,
+                 int *rowErrorCount,
+                 int *columnErrorCount,
+                 int *errorRow,
+                 int *errorColumn)
+{
+    int row,column;
+    printf("\nRow Parity Check\n");
+    for (row = 0; row < rowCount; row++)
+    {
+       if (rowParity[row] != matrix[row][columnCount])
+       {
+        (*rowErrorCount)++;
+        *errorRow = row;
+        printf("Row %d : FAIL (Received = %d, Calculated = %d)\n",
+               row + 1,
+               matrix[row][columnCount],
+               rowParity[row]);
+       }
+       else
+       {
+          printf("Row %d : PASS\n", row + 1);
+       }
+    }
+    printf("\nColumn Parity Check\n");
+    for (column = 0; column < columnCount; column++)
+    {
+       if (columnParity[column] != matrix[rowCount][column])
+       {
+          (*columnErrorCount)++;
+          *errorColumn = column;
+          printf("Column %d : FAIL (Received = %d, Calculated = %d)\n",
+               column + 1,
+               matrix[rowCount][column],
+               columnParity[column]);
+       }
+       else
+       {
+          printf("Column %d : PASS\n", column + 1);
+       }
+    }
+    printf("\nCorner Parity Check\n");
+    if (cornerParity != matrix[rowCount][columnCount])
+    {
+        printf("Corner Parity : FAIL\n");
+    }
+    else
+    {
+        printf("Corner Parity : PASS\n");
+    }
+    if (*rowErrorCount == 1)
+    {
+       printf("Changed Row Parity    : Row %d\n", *errorRow + 1);
+    }
+    if (*columnErrorCount == 1)
+    {
+       printf("Changed Column Parity : Column %d\n", *errorColumn + 1);
+    }
+    if (*rowErrorCount == 1 && *columnErrorCount == 1)
+    {
+       printf("Error Bit Location    : [%d][%d]\n",
+           *errorRow + 1,
+           *errorColumn + 1);
+    }
+}
+int main()
+{
+    int receivedMatrix[MAX_SIZE + 1][BIT_SIZE + 1];
+    int rowCount, columnCount;
+    int rowParity[MAX_SIZE + 1] = {0};
+    int columnParity[BIT_SIZE + 1] = {0};
+    int cornerParity;
+    int rowErrorCount = 0;
+    int columnErrorCount = 0;
+    int errorRow = -1;
+    int errorColumn = -1;
+    printf("2D PARITY RECEIVER\n");
+    readMatrixFile(receivedMatrix, &rowCount, &columnCount);
+    displayMatrix(receivedMatrix, rowCount, columnCount);
+    simulateError(receivedMatrix, rowCount, columnCount);
+    recalculateParity(receivedMatrix,rowCount,columnCount,rowParity,columnParity,&cornerParity);
+    displayRecalculatedParity(receivedMatrix,rowCount,columnCount,rowParity,columnParity,cornerParity);
+    checkParity(receivedMatrix,rowCount,columnCount,rowParity,columnParity,cornerParity,&rowErrorCount,&columnErrorCount,&errorRow,&errorColumn);
+    return 0;
+}
+
