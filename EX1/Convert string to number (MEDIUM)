@@ -1,0 +1,15 @@
+def stringToNumber(s: str) -> int:
+    result = 0
+    for char in s:
+        digit = ord(char) - ord('0')
+        result = result * 10 + digit
+    return result
+if __name__ == "__main__":
+    import sys
+    input = sys.stdin.read
+    data = input().split()
+    if data:
+        num_test_cases = int(data[0])
+        test_cases = data[1:num_test_cases + 1]
+        for s in test_cases:
+            print(stringToNumber(s))
