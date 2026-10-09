@@ -1,0 +1,62 @@
+// dns_client.c
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+#define MAX 100
+
+int main()
+{
+    int sockfd;
+    struct sockaddr_in server;
+    socklen_t server_len;
+
+    char url[MAX];
+    char response[MAX];
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    server.sin_family = AF_INET;
+    server.sin_port = htons(PORT);
+    server.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    server_len = sizeof(server);
+
+    printf("DNS Client\n");
+    printf("Enter URL: ");
+    scanf("%s", url);
+
+    sendto(sockfd,
+           url,
+           strlen(url),
+           0,
+           (struct sockaddr *)&server,
+           server_len);
+
+    memset(response, 0, MAX);
+
+    recvfrom(sockfd,
+             response,
+             MAX - 1,
+             0,
+             (struct sockaddr *)&server,
+             &server_len);
+
+    printf("\nURL       : %s\n", url);
+    printf("IP Address: %s\n", response);
+
+    close(sockfd);
+
+    return 0;
+}
