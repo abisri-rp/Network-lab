@@ -1,0 +1,133 @@
+// dns_server.c
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8021
+#define MAX 100
+
+struct DNS
+{
+    char url[50];
+    char ip[50];
+};
+
+struct DNS table[] =
+{
+    {"google.com", "142.250.183.14"},
+    {"youtube.com", "142.250.72.206"},
+    {"facebook.com", "157.240.241.35"},
+    {"amazon.com", "205.251.242.103"},
+    {"instagram.com", "157.240.241.174"}
+};
+
+int main()
+{
+    int sockfd;
+    struct sockaddr_in server, client;
+    socklen_t client_len;
+    char url[MAX];
+    char response[MAX];
+
+    int n;
+    int i;
+    int found;
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = INADDR_ANY;
+    server.sin_port = htons(PORT);
+
+    if (bind(sockfd,
+             (struct sockaddr *)&server,
+             sizeof(server)) < 0)
+    {
+        perror("Bind failed");
+        exit(1);
+    }
+
+    printf("DNS Server Started...\n\n");
+
+    printf("DNS TABLE\n");
+    printf("-------------------------------\n");
+    printf("%-20s %-20s\n", "URL", "IP Address");
+    printf("-------------------------------\n");
+
+    for (i = 0; i < 5; i++)
+    {
+        printf("%-20s %-20s\n",
+               table[i].url,
+               table[i].ip);
+    }
+
+    printf("-------------------------------\n");
+    printf("Waiting for client...\n");
+
+    while (1)
+    {
+        client_len = sizeof(client);
+
+        memset(url, 0, MAX);
+
+        n = recvfrom(sockfd,
+                     url,
+                     MAX - 1,
+                     0,
+                     (struct sockaddr *)&client,
+                     &client_len);
+
+        if (n < 0)
+        {
+            perror("Receive failed");
+            continue;
+        }
+
+        url[n] = '\0';
+
+        printf("\nClient requested: %s\n", url);
+
+        found = 0;
+
+        for (i = 0; i < 5; i++)
+        {
+            if (strcmp(url, table[i].url) == 0)
+            {
+                strcpy(response, table[i].ip);
+                found = 1;
+                break;
+            }
+        }
+
+        if (found == 1)
+        {
+            printf("IP Address: %s\n", response);
+        }
+        else
+        {
+            strcpy(response, "Not Available");
+            printf("IP Address: Not Available\n");
+        }
+
+        sendto(sockfd,
+               response,
+               strlen(response),
+               0,
+               (struct sockaddr *)&client,
+               client_len);
+    }
+
+    close(sockfd);
+
+    return 0;
+}
