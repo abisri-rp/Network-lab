@@ -1,0 +1,122 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define SIZE 1024
+
+int main(int argc, char *argv[])
+{
+    int clientSocket;
+    int port;
+
+    char *ip;
+    char filename[SIZE];
+    char buffer[SIZE];
+
+    struct sockaddr_in serverAddr;
+
+    long fileSize;
+    long totalReceived;
+
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP address> <port>\n", argv[0]);
+        return 1;
+    }
+
+    ip = argv[1];
+    port = atoi(argv[2]);
+
+    /* Create socket */
+    clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (clientSocket < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    /* Server address */
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET, ip, &serverAddr.sin_addr) <= 0)
+    {
+        printf("Invalid IP address\n");
+        close(clientSocket);
+        return 1;
+    }
+
+    /* Connect */
+    if (connect(clientSocket,
+                (struct sockaddr *)&serverAddr,
+                sizeof(serverAddr)) < 0)
+    {
+        perror("Connection failed");
+        close(clientSocket);
+        return 1;
+    }
+
+    printf("Connected to server.\n");
+
+    /* Enter file name */
+    printf("Enter file name: ");
+    fgets(filename, SIZE, stdin);
+
+    filename[strcspn(filename, "\n")] = '\0';
+
+    /* Send file name */
+    send(clientSocket, filename, strlen(filename) + 1, 0);
+
+    /* Receive file status */
+    memset(buffer, 0, SIZE);
+
+    recv(clientSocket, buffer, SIZE - 1, 0);
+
+    if (strcmp(buffer, "NOT_PRESENT") == 0)
+    {
+        printf("\nFile is NOT PRESENT on the server.\n");
+    }
+    else if (strcmp(buffer, "PRESENT") == 0)
+    {
+        printf("\nFile is PRESENT on the server.\n");
+
+        /* Receive file size */
+        recv(clientSocket, &fileSize, sizeof(fileSize), 0);
+
+        printf("File size: %ld bytes\n", fileSize);
+
+        printf("\n----- File Content -----\n");
+
+        totalReceived = 0;
+
+        while (totalReceived < fileSize)
+        {
+            int bytesReceived;
+
+            bytesReceived = recv(clientSocket,
+                                 buffer,
+                                 SIZE - 1,
+                                 0);
+
+            if (bytesReceived <= 0)
+                break;
+
+            buffer[bytesReceived] = '\0';
+
+            printf("%s", buffer);
+
+            totalReceived += bytesReceived;
+        }
+
+        printf("\n\n----- End of File -----\n");
+
+        printf("Total bytes received: %ld\n", totalReceived);
+    }
+
+    close(clientSocket);
+
+    return 0;
+}
