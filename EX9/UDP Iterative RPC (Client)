@@ -1,0 +1,60 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8093
+
+struct rpc_request
+{
+    int a;
+    int b;
+};
+
+struct rpc_response
+{
+    int result;
+};
+
+int main()
+{
+    int sockfd;
+    struct sockaddr_in server;
+    socklen_t len;
+    struct rpc_request req;
+    struct rpc_response res;
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        perror("Socket creation failed");
+        exit(1);
+    }
+
+    server.sin_family = AF_INET;
+    server.sin_port = htons(PORT);
+    server.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    printf("Enter first number: ");
+    scanf("%d", &req.a);
+
+    printf("Enter second number: ");
+    scanf("%d", &req.b);
+
+    /* Remote procedure call request */
+    sendto(sockfd, &req, sizeof(req), 0,
+           (struct sockaddr *)&server, sizeof(server));
+
+    len = sizeof(server);
+
+    recvfrom(sockfd, &res, sizeof(res), 0,
+             (struct sockaddr *)&server, &len);
+
+    printf("\nRPC Result from Server: %d\n", res.result);
+
+    close(sockfd);
+
+    return 0;
+}
