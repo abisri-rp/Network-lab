@@ -1,0 +1,95 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define SIZE 1024
+
+int main(int argc, char *argv[])
+{
+    int clientSocket;
+    int port;
+    char *ip;
+    struct sockaddr_in serverAddr;
+    char buffer[SIZE];
+
+    if (argc != 3)
+    {
+        printf("Usage: %s <IP address> <port>\n", argv[0]);
+        return 1;
+    }
+
+    ip = argv[1];
+    port = atoi(argv[2]);
+
+    clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (clientSocket < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET, ip, &serverAddr.sin_addr) <= 0)
+    {
+        fprintf(stderr, "Invalid IP address\n");
+        close(clientSocket);
+        return 1;
+    }
+
+    if (connect(clientSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0)
+    {
+        perror("Connection failed");
+        close(clientSocket);
+        return 1;
+    }
+
+    printf("Connected to server %s:%d\n", ip, port);
+
+    while (1)
+    {
+        printf("Client: ");
+        if (fgets(buffer, SIZE, stdin) == NULL)
+            break; // Handle Ctrl+D EOF safely
+
+        buffer[strcspn(buffer, "\n")] = '\0';
+
+        // Prevent sending empty packets which can break stream parsing
+        if (strlen(buffer) == 0) {
+            continue;
+        }
+
+        if (send(clientSocket, buffer, strlen(buffer), 0) < 0) {
+            perror("Send failed");
+            break;
+        }
+
+        if (strcmp(buffer, "exit") == 0)
+            break;
+
+        memset(buffer, 0, SIZE);
+        int bytes = recv(clientSocket, buffer, SIZE - 1, 0);
+
+        if (bytes <= 0)
+        {
+            if (bytes == 0)
+                printf("Server disconnected gracefully.\n");
+            else
+                perror("Receive failed");
+            break;
+        }
+
+        buffer[bytes] = '\0'; // Guaranteed safety
+        printf("Server: %s\n", buffer);
+
+        if (strcmp(buffer, "exit") == 0)
+            break;
+    }
+
+    close(clientSocket);
+    printf("Connection closed.\n");
+    return 0;
+}
