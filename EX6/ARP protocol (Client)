@@ -1,0 +1,132 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define SIZE 1024
+
+int main(int argc, char *argv[])
+{
+    int clientSocket;
+    int port;
+
+    char *serverIP;
+
+    struct sockaddr_in serverAddr;
+
+    char ip[SIZE];
+    char mac[SIZE];
+    char response[SIZE];
+
+    if (argc != 3)
+    {
+        printf("Usage: %s <server-ip> <port>\n", argv[0]);
+        return 1;
+    }
+
+    serverIP = argv[1];
+    port = atoi(argv[2]);
+
+    /* Create socket */
+    clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (clientSocket < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    /* Server address */
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET,
+                  serverIP,
+                  &serverAddr.sin_addr) <= 0)
+    {
+        printf("Invalid server IP address.\n");
+        close(clientSocket);
+        return 1;
+    }
+
+    /* Connect */
+    if (connect(clientSocket,
+                (struct sockaddr *)&serverAddr,
+                sizeof(serverAddr)) < 0)
+    {
+        perror("Connection failed");
+        close(clientSocket);
+        return 1;
+    }
+
+    printf("Connected to ARP Server.\n");
+
+    /* Get IP address */
+    printf("Enter IP address: ");
+    fgets(ip, SIZE, stdin);
+
+    ip[strcspn(ip, "\n")] = '\0';
+
+    /* Send IP address */
+    send(clientSocket,
+         ip,
+         strlen(ip) + 1,
+         0);
+
+    /* Receive response */
+    memset(response, 0, SIZE);
+
+    recv(clientSocket,
+         response,
+         SIZE - 1,
+         0);
+
+    /* IP found */
+    if (strcmp(response, "NOT_FOUND") != 0)
+    {
+        printf("\nIP Address : %s\n", ip);
+        printf("MAC Address: %s\n", response);
+        printf("ARP entry found in cache.\n");
+    }
+    else
+    {
+        /* IP not found */
+        printf("\nIP address not found in ARP cache.\n");
+
+        printf("Enter MAC address for %s: ", ip);
+
+        fgets(mac, SIZE, stdin);
+
+        mac[strcspn(mac, "\n")] = '\0';
+
+        /* Send MAC address */
+        send(clientSocket,
+             mac,
+             strlen(mac) + 1,
+             0);
+
+        /* Receive insertion status */
+        memset(response, 0, SIZE);
+
+        recv(clientSocket,
+             response,
+             SIZE - 1,
+             0);
+
+        if (strcmp(response, "INSERTED") == 0)
+        {
+            printf("\nARP entry inserted successfully.\n");
+            printf("IP Address : %s\n", ip);
+            printf("MAC Address: %s\n", mac);
+        }
+        else
+        {
+            printf("\nARP table is full.\n");
+        }
+    }
+
+    close(clientSocket);
+
+    return 0;
+}
