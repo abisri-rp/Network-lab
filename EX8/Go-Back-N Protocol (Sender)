@@ -1,0 +1,173 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+
+#define PORT 8080
+#define MAX 50
+
+struct Packet
+{
+    int seqnum;
+    char data[50];
+    int acknum;
+    int testcase;
+};
+
+int main()
+{
+    int sock;
+    struct sockaddr_in serv_addr;
+    int m, window, total;
+    int i, base, next;
+    int drop;
+    char msg[50];
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
+
+    if (connect(sock, (struct sockaddr *)&serv_addr,
+                sizeof(serv_addr)) < 0)
+    {
+        printf("Connection failed\n");
+        return 1;
+    }
+
+    printf("Enter number of sequence bits: ");
+    scanf("%d", &m);
+
+    window = (1 << m) - 1;
+
+    printf("Sliding window size: %d\n", window);
+
+    printf("Enter total number of frames to send: ");
+    scanf("%d", &total);
+
+    struct Packet packets[MAX];
+
+    for (i = 0; i < total; i++)
+    {
+        packets[i].seqnum = i;
+
+        printf("Enter message for frame %d: ", i);
+        scanf("%s", packets[i].data);
+
+        packets[i].testcase = 0;
+    }
+
+    printf("Enter frame index to drop: ");
+    scanf("%d", &drop);
+
+    /*
+       testcase = 1 means packet loss
+       testcase = 2 means corrupted/mismatched frame
+       testcase = 3 means duplicate ACK
+       testcase = 0 means normal
+    */
+
+    if (drop >= 0 && drop < total)
+    {
+        packets[drop].testcase = 1;
+    }
+
+    struct timeval timeout;
+
+    timeout.tv_sec = 2;
+    timeout.tv_usec = 0;
+
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+               &timeout, sizeof(timeout));
+
+    base = 0;
+    next = 0;
+
+    while (base < total)
+    {
+        /*
+           Send frames within the sliding window
+        */
+        while (next < base + window && next < total)
+        {
+            printf("Sending frame %d\n",
+                   packets[next].seqnum);
+
+            send(sock, &packets[next],
+                 sizeof(struct Packet), 0);
+
+            if (next == drop)
+            {
+                printf("Timer started for oldest unacknowledged "
+                       "frame %d\n", base);
+            }
+
+            next++;
+        }
+
+        struct Packet ackpkt;
+
+        int bytes;
+
+        bytes = recv(sock, &ackpkt,
+                     sizeof(struct Packet), 0);
+
+        if (bytes <= 0)
+        {
+            printf("\nNo response received within 2 seconds\n");
+
+            printf("Go-Back-N Retransmission: "
+                   "Resending frames %d through %d\n",
+                   base, next - 1);
+
+            /*
+               Retransmit all unacknowledged frames
+            */
+            for (i = base; i < next; i++)
+            {
+                packets[i].testcase = 0;
+
+                printf("Retransmitting frame %d: %s\n",
+                       packets[i].seqnum,
+                       packets[i].data);
+
+                send(sock, &packets[i],
+                     sizeof(struct Packet), 0);
+            }
+
+            continue;
+        }
+
+        /*
+           Valid cumulative ACK
+        */
+        if (ackpkt.acknum >= base &&
+            ackpkt.acknum < next)
+        {
+            printf("ACK %d is valid\n",
+                   ackpkt.acknum);
+
+            base = ackpkt.acknum + 1;
+
+            printf("Window updated: "
+                   "Next expected ACK = %d\n",
+                   base);
+        }
+        else
+        {
+            printf("Duplicate ACK %d ignored\n",
+                   ackpkt.acknum);
+        }
+    }
+
+    printf("\nAll frames delivered and acknowledged: %d\n",
+           total);
+
+    close(sock);
+
+    return 0;
+}
