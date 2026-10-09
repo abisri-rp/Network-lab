@@ -1,0 +1,56 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8095
+#define SIZE 1024
+
+int main()
+{
+    int sockfd;
+    char message[SIZE];
+    char buffer[SIZE];
+
+    struct sockaddr_in server_addr;
+    socklen_t server_len = sizeof(server_addr);
+
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (sockfd < 0)
+    {
+        printf("Socket creation failed\n");
+        return 1;
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    printf("Enter string to reverse: ");
+    fgets(message, SIZE, stdin);
+
+    message[strcspn(message, "\n")] = '\0';
+
+    sendto(sockfd, message, strlen(message), 0,
+           (struct sockaddr *)&server_addr, server_len);
+
+    int n = recvfrom(sockfd, buffer, SIZE - 1, 0,
+                     (struct sockaddr *)&server_addr, &server_len);
+
+    if (n < 0)
+    {
+        printf("Receive failed\n");
+        close(sockfd);
+        return 1;
+    }
+
+    buffer[n] = '\0';
+
+    printf("Reverse received from server: %s\n", buffer);
+
+    close(sockfd);
+
+    return 0;
+}
