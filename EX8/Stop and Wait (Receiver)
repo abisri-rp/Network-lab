@@ -1,0 +1,147 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+
+struct Frame
+{
+    int frame_id;
+    char content[50];
+    int testcase;
+};
+
+int main()
+{
+    int server_fd;
+    int new_socket;
+
+    struct sockaddr_in address;
+
+    int addrlen;
+
+    int expected_frame;
+
+    int drop_done;
+
+    addrlen = sizeof(address);
+
+    server_fd = socket(AF_INET,
+                       SOCK_STREAM,
+                       0);
+
+    int opt = 1;
+
+    setsockopt(server_fd,
+               SOL_SOCKET,
+               SO_REUSEADDR,
+               &opt,
+               sizeof(opt));
+
+    address.sin_family = AF_INET;
+
+    address.sin_addr.s_addr = INADDR_ANY;
+
+    address.sin_port = htons(PORT);
+
+    bind(server_fd,
+         (struct sockaddr *)&address,
+         sizeof(address));
+
+    listen(server_fd, 3);
+
+    printf("Stop-and-Wait Receiver online\n");
+
+    printf("Waiting for connection on port %d...\n",
+           PORT);
+
+    new_socket = accept(server_fd,
+                        (struct sockaddr *)&address,
+                        (socklen_t *)&addrlen);
+
+    expected_frame = 0;
+
+    drop_done = 0;
+
+    struct Frame frame;
+
+    while (recv(new_socket,
+                &frame,
+                sizeof(struct Frame),
+                0) > 0)
+    {
+        /*
+           Simulate packet loss
+        */
+        if (frame.testcase == 1 &&
+            drop_done == 0)
+        {
+            printf("\nPacket loss simulated!\n");
+
+            printf("Dropping frame %d\n",
+                   frame.frame_id);
+
+            drop_done = 1;
+
+            continue;
+        }
+
+        /*
+           Correct frame received
+        */
+        if (frame.frame_id == expected_frame)
+        {
+            printf("\nReceived frame %d : %s\n",
+                   frame.frame_id,
+                   frame.content);
+
+            struct Frame ack;
+
+            ack.frame_id = frame.frame_id;
+
+            ack.testcase = 0;
+
+            strcpy(ack.content, "ACK");
+
+            printf("Sending ACK %d to sender\n",
+                   ack.frame_id);
+
+            send(new_socket,
+                 &ack,
+                 sizeof(struct Frame),
+                 0);
+
+            expected_frame++;
+        }
+        else
+        {
+            /*
+               Duplicate frame
+            */
+            printf("Duplicate frame %d received\n",
+                   frame.frame_id);
+
+            struct Frame ack;
+
+            ack.frame_id = expected_frame - 1;
+
+            ack.testcase = 0;
+
+            strcpy(ack.content, "DUPLICATE ACK");
+
+            send(new_socket,
+                 &ack,
+                 sizeof(struct Frame),
+                 0);
+        }
+    }
+
+    close(new_socket);
+
+    close(server_fd);
+
+    return 0;
+}
