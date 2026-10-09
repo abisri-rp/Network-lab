@@ -1,0 +1,147 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/stat.h>
+
+#define SIZE 1024
+
+int main(int argc, char *argv[])
+{
+    int serverSocket, clientSocket;
+    int port;
+    struct sockaddr_in serverAddr, clientAddr;
+    socklen_t addrSize;
+
+    char filename[SIZE];
+    char buffer[SIZE];
+
+    FILE *fp;
+    long fileSize;
+
+    if (argc != 2)
+    {
+        printf("Usage: %s <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = atoi(argv[1]);
+
+    /* Create socket */
+    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (serverSocket < 0)
+    {
+        perror("Socket creation failed");
+        return 1;
+    }
+
+    /* Server address */
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    serverAddr.sin_port = htons(port);
+
+    /* Bind */
+    if (bind(serverSocket, (struct sockaddr *)&serverAddr,
+             sizeof(serverAddr)) < 0)
+    {
+        perror("Bind failed");
+        close(serverSocket);
+        return 1;
+    }
+
+    /* Listen */
+    if (listen(serverSocket, 5) < 0)
+    {
+        perror("Listen failed");
+        close(serverSocket);
+        return 1;
+    }
+
+    printf("Server started on port %d\n", port);
+    printf("Waiting for client...\n");
+
+    while (1)
+    {
+        /* Accept client */
+        addrSize = sizeof(clientAddr);
+
+        clientSocket = accept(serverSocket,
+                              (struct sockaddr *)&clientAddr,
+                              &addrSize);
+
+        if (clientSocket < 0)
+        {
+            perror("Accept failed");
+            continue;
+        }
+
+        printf("\nClient connected.\n");
+
+        /* Receive file name */
+        memset(filename, 0, SIZE);
+
+        recv(clientSocket, filename, SIZE - 1, 0);
+
+        printf("Requested file: %s\n", filename);
+
+        /* Open file */
+        fp = fopen(filename, "r");
+
+        if (fp == NULL)
+        {
+            /* File not present */
+            strcpy(buffer, "NOT_PRESENT");
+
+            send(clientSocket, buffer, strlen(buffer) + 1, 0);
+
+            printf("File is not present.\n");
+        }
+        else
+        {
+            /* File is present */
+            strcpy(buffer, "PRESENT");
+
+            send(clientSocket, buffer, strlen(buffer) + 1, 0);
+
+            printf("File is present.\n");
+
+            /* Find file size */
+            fseek(fp, 0, SEEK_END);
+            fileSize = ftell(fp);
+            rewind(fp);
+
+            /* Send file size */
+            send(clientSocket, &fileSize, sizeof(fileSize), 0);
+
+            printf("File size: %ld bytes\n", fileSize);
+
+            /* Send file content */
+            while (1)
+            {
+                int bytesRead;
+
+                bytesRead = fread(buffer, 1, SIZE, fp);
+
+                if (bytesRead <= 0)
+                    break;
+
+                send(clientSocket, buffer, bytesRead, 0);
+            }
+
+            fclose(fp);
+
+            printf("File content sent successfully.\n");
+        }
+
+        close(clientSocket);
+
+        printf("Client disconnected.\n");
+        printf("Waiting for next client...\n");
+    }
+
+    close(serverSocket);
+
+    return 0;
+}
