@@ -1,0 +1,154 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define PORT 8080
+
+struct Packet
+{
+    int seqnum;
+    char data[50];
+    int acknum;
+    int testcase;
+};
+
+int main()
+{
+    int server_fd, new_socket;
+    struct sockaddr_in address;
+    int addrlen;
+    int expected_seq;
+    struct Packet pkt;
+    int drop_done;
+    int corrupt_done;
+
+    addrlen = sizeof(address);
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    int opt = 1;
+
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR,
+               &opt, sizeof(opt));
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+
+    bind(server_fd,
+         (struct sockaddr *)&address,
+         sizeof(address));
+
+    listen(server_fd, 3);
+
+    printf("Receiver online waiting for connection "
+           "on port %d...\n", PORT);
+
+    new_socket = accept(server_fd,
+                        (struct sockaddr *)&address,
+                        (socklen_t *)&addrlen);
+
+    expected_seq = 0;
+
+    /*
+       These flags make sure the test condition
+       happens only once.
+    */
+    drop_done = 0;
+    corrupt_done = 0;
+
+    while (recv(new_socket, &pkt,
+                sizeof(struct Packet), 0) > 0)
+    {
+        /*
+           Test case 1:
+           Simulate packet loss.
+        */
+        if (pkt.testcase == 1 && drop_done == 0)
+        {
+            printf("Packet loss simulated! "
+                   "Dropping frame %d\n",
+                   pkt.seqnum);
+
+            drop_done = 1;
+            continue;
+        }
+
+        /*
+           Test case 2:
+           Simulate corrupted/mismatched frame.
+        */
+        if (pkt.testcase == 2 && corrupt_done == 0)
+        {
+            printf("Mismatch! Expected frame %d "
+                   "but received corrupted frame %d\n",
+                   expected_seq,
+                   pkt.seqnum);
+
+            corrupt_done = 1;
+
+            struct Packet ack;
+
+            ack.acknum = expected_seq - 1;
+
+            printf("Sending duplicate ACK %d\n",
+                   ack.acknum);
+
+            send(new_socket, &ack,
+                 sizeof(struct Packet), 0);
+
+            continue;
+        }
+
+        /*
+           Correct frame received
+        */
+        if (pkt.seqnum == expected_seq)
+        {
+            printf("Received frame %d : %s\n",
+                   pkt.seqnum,
+                   pkt.data);
+
+            expected_seq++;
+
+            struct Packet ack;
+
+            ack.acknum = pkt.seqnum;
+
+            printf("Frame accepted. "
+                   "Sending ACK %d back to sender\n",
+                   ack.acknum);
+
+            send(new_socket, &ack,
+                 sizeof(struct Packet), 0);
+        }
+        else
+        {
+            /*
+               Out-of-order frame
+            */
+            printf("Verification failed! "
+                   "Expected frame %d but got frame %d\n",
+                   expected_seq,
+                   pkt.seqnum);
+
+            struct Packet ack;
+
+            ack.acknum = expected_seq - 1;
+
+            printf("Sending duplicate ACK %d\n",
+                   ack.acknum);
+
+            send(new_socket, &ack,
+                 sizeof(struct Packet), 0);
+        }
+    }
+
+    close(new_socket);
+    close(server_fd);
+
+    return 0;
+}
