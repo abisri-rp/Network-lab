@@ -1,0 +1,260 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <time.h>
+#include <pthread.h>
+#include <arpa/inet.h>
+#include "hotel_protocol.h"
+
+#define ROOM_DB "hotel_rooms.dat"
+#define LOG_FILE "hotel_server.log"
+
+// Global Mutex to synchronize all database lookups and modification operations
+pthread_mutex_t db_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Global Thread-Safe Logging Routine
+void log_transaction(const char* client_ip, const char* status, const char* text) {
+    static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+    
+    pthread_mutex_lock(&log_mutex);
+    FILE* log = fopen(LOG_FILE, "a");
+    if (log) {
+        time_t now = time(NULL);
+        char* ts = ctime(&now);
+        ts[strlen(ts) - 1] = '\0'; // Remove newline trailing space
+        fprintf(log, "[%s] IP: %s | Status: %s | %s\n", ts, client_ip, status, text);
+        fclose(log);
+    }
+    pthread_mutex_unlock(&log_mutex);
+}
+
+// Seed the room layouts if database file is missing
+void initialize_room_database() {
+    pthread_mutex_lock(&db_mutex);
+    FILE* file = fopen(ROOM_DB, "rb");
+    if (file) {
+        fclose(file);
+        pthread_mutex_unlock(&db_mutex);
+        return; 
+    }
+    
+    file = fopen(ROOM_DB, "wb");
+    Room inventory[MAX_ROOMS] = {
+        {101, "Standard Single", 1500, false, 0},
+        {102, "Standard Single", 1500, false, 0},
+        {103, "Standard Double", 2500, false, 0},
+        {104, "Standard Double", 2500, false, 0},
+        {201, "Deluxe Suite", 5000, false, 0},
+        {202, "Deluxe Suite", 5000, false, 0},
+        {203, "Executive Suite", 8000, false, 0},
+        {301, "Presidential Penthouse", 15000, false, 0},
+        {302, "Presidential Penthouse", 15000, false, 0},
+        {303, "Presidential Penthouse", 15000, false, 0}
+    };
+    fwrite(inventory, sizeof(Room), MAX_ROOMS, file);
+    fclose(file);
+    pthread_mutex_unlock(&db_mutex);
+}
+
+// Request processing worker core engine
+void handle_hotel_transaction(HotelRequest* req, HotelResponse* res, const char* client_ip) {
+    memset(res, 0, sizeof(HotelResponse));
+    char log_msg[256];
+
+    // Enforce Critical Zone Lock before accessing database records
+    pthread_mutex_lock(&db_mutex);
+    
+    FILE* file = fopen(ROOM_DB, "rb+");
+    if (!file) {
+        res->success = false;
+        strcpy(res->message, "Server error: Room database file missing.");
+        pthread_mutex_unlock(&db_mutex);
+        return;
+    }
+
+    Room catalog[MAX_ROOMS];
+    fread(catalog, sizeof(Room), MAX_ROOMS, file);
+
+    switch (req->cmd) {
+        case CMD_VIEW_ROOMS:
+            res->success = true;
+            res->room_count = MAX_ROOMS;
+            // Hide guest profiles during public availability browsing queries
+            for (int i = 0; i < MAX_ROOMS; i++) {
+                res->rooms[i] = catalog[i];
+                res->rooms[i].guest_id = 0; 
+            }
+            strcpy(res->message, "Room layouts loaded successfully.");
+            log_transaction(client_ip, "SUCCESS", "Viewed room catalog layout.");
+            break;
+
+        case CMD_BOOK_ROOM: {
+            bool found = false;
+            for (int i = 0; i < MAX_ROOMS; i++) {
+                if (catalog[i].room_number == req->target_room_number) {
+                    found = true;
+                    if (catalog[i].is_booked) {
+                        res->success = false;
+                        strcpy(res->message, "Booking Rejection: Room is already reserved by someone else.");
+                        sprintf(log_msg, "Failed booking: Room %d already locked.", req->target_room_number);
+                        log_transaction(client_ip, "CONFLICT", log_msg);
+                    } else {
+                        catalog[i].is_booked = true;
+                        catalog[i].guest_id = req->guest_id;
+                        
+                        fseek(file, 0, SEEK_SET);
+                        fwrite(catalog, sizeof(Room), MAX_ROOMS, file);
+                        
+                        res->success = true;
+                        sprintf(res->message, "Success! Room %d reserved under Guest ID %d.", catalog[i].room_number, req->guest_id);
+                        sprintf(log_msg, "Booked Room: %d to Guest ID: %d", req->target_room_number, req->guest_id);
+                        log_transaction(client_ip, "SUCCESS", log_msg);
+                    }
+                    break;
+                }
+            }
+            if (!found) {
+                res->success = false;
+                strcpy(res->message, "Booking Failed: Target room index does not exist.");
+            }
+            break;
+        }
+
+        case CMD_CANCEL_ROOM: {
+            bool found = false;
+            for (int i = 0; i < MAX_ROOMS; i++) {
+                if (catalog[i].room_number == req->target_room_number) {
+                    found = true;
+                    if (!catalog[i].is_booked) {
+                        res->success = false;
+                        strcpy(res->message, "Cancellation Failed: Selected room is not currently booked.");
+                    } else if (catalog[i].guest_id != req->guest_id) {
+                        res->success = false;
+                        strcpy(res->message, "Cancellation Failed: Authorization Error. Guest ID mismatch.");
+                        sprintf(log_msg, "Unauthorized cancellation attempt on Room %d by Guest %d", req->target_room_number, req->guest_id);
+                        log_transaction(client_ip, "DENIED", log_msg);
+                    } else {
+                        catalog[i].is_booked = false;
+                        catalog[i].guest_id = 0;
+                        
+                        fseek(file, 0, SEEK_SET);
+                        fwrite(catalog, sizeof(Room), MAX_ROOMS, file);
+                        
+                        res->success = true;
+                        sprintf(res->message, "Success! Reservation for Room %d cancelled cleanly.", req->target_room_number);
+                        sprintf(log_msg, "Cancelled Room: %d by Guest: %d", req->target_room_number, req->guest_id);
+                        log_transaction(client_ip, "SUCCESS", log_msg);
+                    }
+                    break;
+                }
+            }
+            if (!found) {
+                res->success = false;
+                strcpy(res->message, "Cancellation Failed: Target room number invalid.");
+            }
+            break;
+        }
+
+        case CMD_CHECK_DETAILS: {
+            int active_reservations = 0;
+            for (int i = 0; i < MAX_ROOMS; i++) {
+                if (catalog[i].is_booked && catalog[i].guest_id == req->guest_id) {
+                    res->rooms[active_reservations++] = catalog[i];
+                }
+            }
+            res->success = true;
+            res->room_count = active_reservations;
+            sprintf(res->message, "Retrieved %d active reservations for your profile.", active_reservations);
+            sprintf(log_msg, "Checked active profile booking history for Guest ID %d", req->guest_id);
+            log_transaction(client_ip, "SUCCESS", log_msg);
+            break;
+        }
+
+        default:
+            res->success = false;
+            strcpy(res->message, "Error: Instruction code variant unrecognizable.");
+            break;
+    }
+
+    fclose(file);
+    pthread_mutex_unlock(&db_mutex); // Safely release lock for next waiting threads
+}
+
+// Structure to pass configuration data packages down to worker child threads
+typedef struct {
+    int client_socket;
+    char client_ip[INET_ADDRSTRLEN];
+} ThreadArgs;
+
+// Concurrent Worker Thread Entry Pointer Context
+void* client_session_handler(void* arg) {
+    ThreadArgs* args = (ThreadArgs*)arg;
+    int client_fd = args->client_socket;
+    char client_ip[INET_ADDRSTRLEN];
+    strcpy(client_ip, args->client_ip);
+    free(args); // Clean up context structure allocation dynamically passed from main loop
+
+    HotelRequest req;
+    HotelResponse res;
+
+    // Direct continuous session tracking loop over socket connection streams
+    while (recv(client_fd, &req, sizeof(HotelRequest), 0) > 0) {
+        if (req.cmd == CMD_EXIT) {
+            break;
+        }
+        handle_hotel_transaction(&req, &res, client_ip);
+        send(client_fd, &res, sizeof(HotelResponse), 0);
+    }
+
+    close(client_fd);
+    log_transaction(client_ip, "DISCONNECTED", "Client session connection ended cleanly.");
+    printf("[SERVER] Concurrent session finished for Client IP: %s\n", client_ip);
+    return NULL;
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in address;
+    int opt = 1;
+    int addrlen = sizeof(address);
+
+    initialize_room_database();
+
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket allocation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror("setsockopt configuration adjustment failed");
+        exit(EXIT_FAILURE);
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(SERVER_PORT);
+
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Bind failed mapping constraints");
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_fd, 20) < 0) {
+        perror("Listen assignment boundary sequence error");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("[CONCURRENT SERVER] Online on Port %d. Thread pool waiting for parallel connections...\n", SERVER_PORT);
+
+    while (1) {
+        if ((client_fd = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+            perror("Accept sequence failure");
+            continue;
+        }
+
+        ThreadArgs* args = (ThreadArgs*)malloc(sizeof(ThreadArgs));
+        args->client_socket = client_fd;
+        inet_ntop(AF_INET, &address.sin_addr, args->client_ip, INET_ADDRSTRLEN);
+
