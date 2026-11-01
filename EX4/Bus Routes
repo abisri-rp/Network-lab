@@ -1,0 +1,115 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+#define MAX_STOPS 1000000
+
+// Node representing a bus index in a stop's list of passing buses
+typedef struct Node {
+    int bus_idx;
+    struct Node* next;
+} Node;
+
+// Structure for elements inside the BFS Queue
+typedef struct {
+    int bus_idx;
+    int level;
+} QueueElement;
+
+int numBusesToDestination(int** routes, int routesSize, int* routesColSize, int source, int target) {
+    // If source and target are the same, no buses are needed
+    if (source == target) {
+        return 0;
+    }
+
+    // Allocate memory for the stop-to-buses map using calloc (zeros out memory)
+    Node** stop_to_buses = (Node**)calloc(MAX_STOPS, sizeof(Node*));
+    
+    // Fill the map: for each stop, append the bus index that visits it
+    for (int i = 0; i < routesSize; i++) {
+        for (int j = 0; j < routesColSize[i]; j++) {
+            int stop = routes[i][j];
+            Node* newNode = (Node*)malloc(sizeof(Node));
+            newNode->bus_idx = i;
+            newNode->next = stop_to_buses[stop];
+            stop_to_buses[stop] = newNode;
+        }
+    }
+
+    // Visited tracking arrays
+    bool* visited_buses = (bool*)calloc(routesSize, sizeof(bool));
+    bool* visited_stops = (bool*)calloc(MAX_STOPS, sizeof(bool));
+
+    // Queue allocation
+    // Maximum queue entries won't exceed total number of buses
+    QueueElement* queue = (QueueElement*)malloc(routesSize * sizeof(QueueElement));
+    int head = 0, tail = 0;
+
+    // Enqueue all buses passing through the source stop
+    visited_stops[source] = true;
+    Node* curr = stop_to_buses[source];
+    while (curr != NULL) {
+        int bus = curr->bus_idx;
+        if (!visited_buses[bus]) {
+            visited_buses[bus] = true;
+            queue[tail++] = (QueueElement){bus, 1};
+        }
+        curr = curr->next;
+    }
+
+    int result = -1;
+
+    // Begin BFS
+    while (head < tail) {
+        QueueElement current = queue[head++];
+        int u_bus = current.bus_idx;
+        int level = current.level;
+
+        // Check all stops that this current bus travels through
+        for (int i = 0; i < routesColSize[u_bus]; i++) {
+            int stop = routes[u_bus][i];
+
+            if (stop == target) {
+                result = level;
+                goto cleanup; // Exit loops early to handle resource cleanup
+            }
+
+            // If the stop hasn't been visited, check its overlapping routes
+            if (!visited_stops[stop]) {
+                visited_stops[stop] = true;
+                
+                Node* next_bus_node = stop_to_buses[stop];
+                while (next_bus_node != NULL) {
+                    int v_bus = next_bus_node->bus_idx;
+                    if (!visited_buses[v_bus]) {
+                        visited_buses[v_bus] = true;
+                        queue[tail++] = (QueueElement){v_bus, level + 1};
+                    }
+                    next_bus_node = next_bus_node->next;
+                }
+            }
+        }
+    }
+
+cleanup:
+    // Free dynamically allocated adjacency list structures
+    for (int i = 0; i < routesSize; i++) {
+        for (int j = 0; j < routesColSize[i]; j++) {
+            int stop = routes[i][j];
+            Node* temp = stop_to_buses[stop];
+            while (temp != NULL) {
+                Node* toFree = temp;
+                temp = temp->next;
+                free(toFree);
+            }
+            stop_to_buses[stop] = NULL; // Prevent double freeing shared stops
+        }
+    }
+
+    free(stop_to_buses);
+    free(visited_buses);
+    free(visited_stops);
+    free(queue);
+
+    return result;
+}
