@@ -1,0 +1,113 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <ctype.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
+#define PORT 8080
+#define BUFFER_SIZE 1024
+
+// Core logic: Check if a string reads the same forwards and backwards
+// Ignores case, spaces, and punctuation to provide a resilient check
+bool is_palindrome(const char *str) {
+    int left = 0;
+    int right = strlen(str) - 1;
+
+    while (left < right) {
+        // Skip non-alphanumeric characters from left
+        while (left < right && !isalnum((unsigned char)str[left])) {
+            left++;
+        }
+        // Skip non-alphanumeric characters from right
+        while (left < right && !isalnum((unsigned char)str[right])) {
+            right--;
+        }
+
+        if (tolower((unsigned char)str[left]) != tolower((unsigned char)str[right])) {
+            return false;
+        }
+        left++;
+        right--;
+    }
+    return true;
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in address;
+    int opt = 1;
+    int addrlen = sizeof(address);
+    char buffer[BUFFER_SIZE];
+
+    // 1. Create TCP socket
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // 2. Set socket options to avoid "Address already in use" errors
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror("setsockopt failed");
+        exit(EXIT_FAILURE);
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+
+    // 3. Bind socket to the specified port
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // 4. Start listening for incoming connections
+    if (listen(server_fd, 3) < 0) {
+        perror("Listen failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("[SERVER] Palindrome Verification Service running on port %d...\n", PORT);
+
+    while (1) {
+        printf("[SERVER] Awaiting incoming connection...\n");
+        if ((client_fd = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+            perror("Accept error");
+            continue;
+        }
+
+        printf("[SERVER] Connected client verified successfully.\n");
+
+        int valread;
+        // Keep checking strings until the client closes the connection
+        while ((valread = recv(client_fd, buffer, BUFFER_SIZE - 1, 0)) > 0) {
+            buffer[valread] = '\0'; // Null-terminate string
+
+            // Clean up trailing newline characters from input string (\r or \n)
+            buffer[strcspn(buffer, "\r\n")] = '\0';
+
+            // Check for exit payload flags
+            if (strcmp(buffer, "exit") == 0 || strlen(buffer) == 0) {
+                printf("[SERVER] Client requested session disconnection.\n");
+                break;
+            }
+
+            printf("[SERVER] Evaluating string payload: \"%s\"\n", buffer);
+
+            // Compute result metric
+            const char *response = is_palindrome(buffer) 
+                ? "YES: It is a valid palindrome.\n" 
+                : "NO: It is not a palindrome.\n";
+
+            send(client_fd, response, strlen(response), 0);
+        }
+
+        close(client_fd);
+        printf("[SERVER] Client session terminated cleanly.\n\n");
+    }
+
+    close(server_fd);
+    return 0;
+}
