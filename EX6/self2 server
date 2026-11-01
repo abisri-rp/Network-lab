@@ -1,0 +1,233 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <time.h>
+#include <arpa/inet.h>
+#include "hospital_protocol.h"
+
+#define LOG_FILE "hospital_log.txt"
+#define DOCTOR_DB "doctors.dat"
+
+// Utility to append transaction entries cleanly with high-precision timestamping
+void log_event(const char* client_ip, const char* status, const char* text) {
+    FILE* log = fopen(LOG_FILE, "a");
+    if (!log) return;
+    time_t now = time(NULL);
+    char* ts = ctime(&now);
+    ts[strlen(ts) - 1] = '\0'; // Remove newline trailing space
+    fprintf(log, "[%s] Client: %s | Status: %s | %s\n", ts, client_ip, status, text);
+    fclose(log);
+}
+
+// Populate structural mock data into flat file database if missing
+void initialize_database() {
+    FILE* file = fopen(DOCTOR_DB, "rb");
+    if (file) {
+        fclose(file);
+        return; // DB already initialized
+    }
+    
+    file = fopen(DOCTOR_DB, "wb");
+    Doctor docs[MAX_DOCTORS] = {
+        {101, "Dr. Alice Smith", "Cardiology", "09:00 AM - 01:00 PM", {1, 2, 3, 4}, {false, false, false, false}},
+        {102, "Dr. Bob Jones", "Pediatrics", "02:00 PM - 06:00 PM", {1, 2, 3, 4}, {false, false, false, false}},
+        {103, "Dr. Charlie Lee", "Neurology", "10:00 AM - 02:00 PM", {1, 2, 3, 4}, {false, false, false, false}}
+    };
+    fwrite(docs, sizeof(Doctor), MAX_DOCTORS, file);
+    fclose(file);
+}
+
+// Core Request Engine Processor
+void process_hospital_transaction(HospitalRequest* req, HospitalResponse* res, const char* client_ip) {
+    memset(res, 0, sizeof(HospitalResponse));
+    char details[256];
+
+    // Basic Input Validations
+    if (req->cmd == CMD_BOOK_APPOINTMENT || req->cmd == CMD_CANCEL_APPOINTMENT) {
+        if (req->target_slot < 1 || req->target_slot > MAX_SLOTS) {
+            res->success = false;
+            strcpy(res->message, "Error: Invalid slot number selection. Allowed: 1-4.");
+            log_event(client_ip, "INVALID_INPUT", "Out of bounds slot index requested.");
+            return;
+        }
+    }
+
+    FILE* file = fopen(DOCTOR_DB, "rb+");
+    if (!file) {
+        res->success = false;
+        strcpy(res->message, "Critical error: Hospital system schedule database offline.");
+        return;
+    }
+
+    // Read existing database snapshot
+    Doctor docs[MAX_DOCTORS];
+    fread(docs, sizeof(Doctor), MAX_DOCTORS, file);
+
+    switch (req->cmd) {
+        case CMD_REGISTER:
+            res->success = true;
+            sprintf(res->message, "Patient '%s' successfully registered with ID %d.", req->patient_name, req->patient_id);
+            sprintf(details, "Registered Patient ID: %d, Name: %s", req->patient_id, req->patient_name);
+            log_event(client_ip, "SUCCESS", details);
+            break;
+
+        case CMD_SEARCH_AVAILABILITY:
+            res->success = true;
+            res->count = MAX_DOCTORS;
+            memcpy(res->doctors, docs, sizeof(docs));
+            strcpy(res->message, "Doctor schedules retrieved successfully.");
+            log_event(client_ip, "SUCCESS", "Searched system doctor availabilities.");
+            break;
+
+        case CMD_BOOK_APPOINTMENT: {
+            bool doc_found = false;
+            for (int i = 0; i < MAX_DOCTORS; i++) {
+                if (docs[i].doctor_id == req->target_doctor_id) {
+                    doc_found = true;
+                    int slot_idx = req->target_slot - 1;
+                    
+                    if (docs[i].slot_booked[slot_idx]) {
+                        res->success = false;
+                        strcpy(res->message, "Error: The selected appointment slot is already booked.");
+                        sprintf(details, "Failed booking: Dr %d, Slot %d already occupied", req->target_doctor_id, req->target_slot);
+                        log_event(client_ip, "BOOKING_FAILED", details);
+                    } else {
+                        docs[i].slot_booked[slot_idx] = true;
+                        res->success = true;
+                        sprintf(res->message, "Appointment Confirmed! Dr. %s at Slot %d for Patient ID %d.", docs[i].name, req->target_slot, req->patient_id);
+                        
+                        // Rewrite the updated schedule snapshot atomically
+                        fseek(file, 0, SEEK_SET);
+                        fwrite(docs, sizeof(Doctor), MAX_DOCTORS, file);
+                        
+                        sprintf(details, "Booked Appt: Patient %d with Dr %d at Slot %d", req->patient_id, req->target_doctor_id, req->target_slot);
+                        log_event(client_ip, "SUCCESS", details);
+                    }
+                    break;
+                }
+            }
+            if (!doc_found) {
+                res->success = false;
+                strcpy(res->message, "Error: Target Doctor ID not found in system registry.");
+                log_event(client_ip, "NOT_FOUND", "Booking failed due to invalid Doctor ID.");
+            }
+            break;
+        }
+
+        case CMD_CANCEL_APPOINTMENT: {
+            bool doc_found = false;
+            for (int i = 0; i < MAX_DOCTORS; i++) {
+                if (docs[i].doctor_id == req->target_doctor_id) {
+                    doc_found = true;
+                    int slot_idx = req->target_slot - 1;
+                    
+                    if (!docs[i].slot_booked[slot_idx]) {
+                        res->success = false;
+                        strcpy(res->message, "Error: Cannot cancel. This slot is already free.");
+                        log_event(client_ip, "CANCEL_FAILED", "Attempted to cancel unbooked slot.");
+                    } else {
+                        docs[i].slot_booked[slot_idx] = false;
+                        res->success = true;
+                        strcpy(res->message, "Appointment successfully cancelled. Slot is now open.");
+                        
+                        fseek(file, 0, SEEK_SET);
+                        fwrite(docs, sizeof(Doctor), MAX_DOCTORS, file);
+                        
+                        sprintf(details, "Cancelled Appt: Patient %d, Dr %d, Slot %d", req->patient_id, req->target_doctor_id, req->target_slot);
+                        log_event(client_ip, "SUCCESS", details);
+                    }
+                    break;
+                }
+            }
+            if (!doc_found) {
+                res->success = false;
+                strcpy(res->message, "Error: Invalid Doctor ID for cancellation routing.");
+            }
+            break;
+        }
+
+        case CMD_VIEW_HISTORY:
+            // Simulating profile fetch since files track schedule availability layouts globally
+            res->success = true;
+            sprintf(res->message, "Active profile session history rendered for Patient ID: %d", req->patient_id);
+            log_event(client_ip, "SUCCESS", "Viewed appointment profile overview.");
+            break;
+
+        default:
+            res->success = false;
+            strcpy(res->message, "Error: Unknown instruction variant processed.");
+            log_event(client_ip, "MALFORMED", "Unknown command code received.");
+            break;
+    }
+    fclose(file);
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in address;
+    int opt = 1;
+    int addrlen = sizeof(address);
+
+    initialize_database();
+
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket creation collapsed");
+        exit(EXIT_FAILURE);
+    }
+
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror("setsockopt error adjustment failed");
+        exit(EXIT_FAILURE);
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(SERVER_PORT);
+
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Bind failed mapping constraints");
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_fd, 10) < 0) {
+        perror("Listen sequence failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("[ITERATIVE SERVER] Active on Port %d. Processing sequentially...\n", SERVER_PORT);
+
+    while (1) {
+        printf("[SERVER] Awaiting next queued incoming client connection call...\n");
+        if ((client_fd = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+            perror("Accept sequence failure");
+            continue;
+        }
+
+        char client_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &address.sin_addr, client_ip, INET_ADDRSTRLEN);
+        printf("[SERVER] Lock acquired on client session! IP: %s\n", client_ip);
+        log_event(client_ip, "CONNECTED", "Session connection established.");
+
+        HospitalRequest req;
+        HospitalResponse res;
+
+        // Loop to serve the CURRENT client completely before terminating the channel
+        while (recv(client_fd, &req, sizeof(HospitalRequest), 0) > 0) {
+            if (req.cmd == CMD_EXIT) {
+                printf("[SERVER] Releasing session context lock for Client IP: %s\n", client_ip);
+                break;
+            }
+            process_hospital_transaction(&req, &res, client_ip);
+            send(client_fd, &res, sizeof(HospitalResponse), 0);
+        }
+
+        close(client_fd);
+        log_event(client_ip, "DISCONNECTED", "Session connection gracefully closed.");
+        printf("[SERVER] Client session finalized cleanly. Ready for the next context.\n\n");
+    }
+
+    close(server_fd);
+    return 0;
+}
