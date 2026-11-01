@@ -1,0 +1,44 @@
+#ifndef PROTOCOL_H
+#define PROTOCOL_H
+
+#define SERVER_PORT 8080
+#define SERVER_IP "127.0.0.1"
+#define MAX_SUBJECTS 5
+
+// Operational Request Codes
+typedef enum {
+    CMD_ADD = 1,
+    CMD_SEARCH,
+    CMD_UPDATE,
+    CMD_DELETE,
+    CMD_DISPLAY_ALL,
+    CMD_TOPPER,
+    CMD_EXIT
+} CommandType;
+
+// Student Record Structure
+typedef struct {
+    int reg_no;
+    char name[50];
+    char dept[20];
+    int semester;
+    float marks[MAX_SUBJECTS];
+    char grades[MAX_SUBJECTS];
+    float cgpa;
+} Student;
+
+// Network Payload sent between Client and Server
+typedef struct {
+    CommandType cmd;
+    int target_reg_no;         // Used for search, delete, update queries
+    Student student_data;      // Container for payload uploads
+} RequestPacket;
+
+typedef struct {
+    bool success;
+    char message[128];
+    int count;                 // Number of student records returning
+    Student student_records[100]; // Allocation array for bulk returns
+} ResponsePacket;
+
+#endif
