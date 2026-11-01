@@ -1,0 +1,82 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include "student_protocol.h"
+
+// In-memory student records database setup configuration
+Student student_db[MAX_STUDENTS] = {
+    {1001, "Aravind Kumar", "Computer Science", 5, 8.92f},
+    {1002, "Divya Lakshmi", "Electronics & Communication", 7, 9.15f},
+    {1003, "Rahul Sharma", "Mechanical Engineering", 3, 7.80f},
+    {1004, "Priyanka Nair", "Information Technology", 5, 8.45f},
+    {1005, "Sanjay Ram", "Civil Engineering", 1, 6.90f}
+};
+
+int main() {
+    int sockfd;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    LookupRequest req;
+    LookupResponse res;
+
+    // 1. Instantiate the datagram UDP socket
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("Socket creation collapsed");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(SERVER_PORT);
+
+    // 2. Bind the socket onto the configuration port
+    if (bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind infrastructure mapping failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("[UDP SERVER] Student Registry Lookup system running on Port %d...\n", SERVER_PORT);
+
+    while (1) {
+        memset(&req, 0, sizeof(LookupRequest));
+        memset(&res, 0, sizeof(LookupResponse));
+
+        // 3. Receive looking parameters from any network client node
+        int bytes_received = recvfrom(sockfd, &req, sizeof(LookupRequest), 0,
+                                      (struct sockaddr *)&client_addr, &addr_len);
+        if (bytes_received < 0) continue;
+
+        char client_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+        printf("[SERVER LOG] Received query request for RegNo: %d from Client IP: %s:%d\n", 
+               req.target_reg_no, client_ip, ntohs(client_addr.sin_port));
+
+        // 4. Query the memory array index map
+        bool match_found = false;
+        for (int i = 0; i < MAX_STUDENTS; i++) {
+            if (student_db[i].reg_no == req.target_reg_no) {
+                res.found = true;
+                res.student_details = student_db[i];
+                match_found = true;
+                break;
+            }
+        }
+
+        if (!match_found) {
+            res.found = false;
+            sprintf(res.error_message, "Error: Student Registration No. %d not found.", req.target_reg_no);
+            printf("[SERVER WARNING] Record lookup failed for RegNo: %d\n", req.target_reg_no);
+        } else {
+            printf("[SERVER SUCCESS] Record located for '%s'. Transmitting payload back...\n", res.student_details.name);
+        }
+
+        // 5. Fire the transaction result package back down the connectionless wire immediately
+        sendto(sockfd, &res, sizeof(LookupResponse), 0, (struct sockaddr *)&client_addr, addr_len);
+    }
+
+    close(sockfd);
+    return 0;
+}
