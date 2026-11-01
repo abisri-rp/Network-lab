@@ -1,0 +1,127 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdbool.h>
+#include <arpa/inet.h>
+#include "weather_protocol.h"
+
+// Sends a packet reliably by implementing an ACK timeout retransmission retry loop
+bool send_packet_reliably(int sockfd, const struct sockaddr_in* dest_addr, WeatherPacket* pkt) {
+    WeatherPacket ack_pkt;
+    struct sockaddr_in src_addr;
+    socklen_t addr_len = sizeof(src_addr);
+    int retries = 0;
+
+    while (retries < MAX_RETRIES) {
+        // Dispatch payload down the unmanaged socket boundary line
+        sendto(sockfd, pkt, sizeof(WeatherPacket), 0, (const struct sockaddr *)dest_addr, sizeof(*dest_addr));
+        
+        if (pkt->type == PKT_QUERY) {
+            printf("[CLIENT] Query packet dispatched. Waiting for statistics payload response...\n");
+        } else {
+            printf("[CLIENT] Telemetry packet sent (Seq: %u). Waiting for ACK...\n", pkt->seq_num);
+        }
+
+        // Wait for incoming socket response package mapping rules
+        int bytes_received = recvfrom(sockfd, &ack_pkt, sizeof(WeatherPacket), 0, 
+                                      (struct sockaddr *)&src_addr, &addr_len);
+        
+        if (bytes_received >= 0) {
+            // Validate incoming payload signatures matches context keys
+            if (pkt->type == PKT_DATA && ack_pkt.type == PKT_ACK && ack_pkt.seq_num == pkt->seq_num) {
+                printf("[CLIENT] ACK confirmed successfully by server for Seq: %u\n", pkt->seq_num);
+                return true;
+            }
+            if (pkt->type == PKT_QUERY && ack_pkt.type == PKT_QUERY_RESP) {
+                if (ack_pkt.status) {
+                    printf("\n=== Real-Time Weather Statistics Summary for %s ===\n", ack_pkt.location);
+                    printf(" -> Historical Average Temperature : %.2f °C\n", ack_pkt.data.temperature);
+                    printf(" -> Historical Average Humidity    : %.2f %%\n", ack_pkt.data.humidity);
+                    printf(" -> Historical Average Pressure    : %.2f hPa\n", ack_pkt.data.pressure);
+                    printf(" -> Historical Average Wind Speed   : %.2f m/s\n", ack_pkt.data.wind_speed);
+                } else {
+                    printf("[CLIENT ERROR] Server reports location details missing or unrecorded.\n");
+                }
+                return true;
+            }
+        } else {
+            // Socket timeout hit due to packet loss
+            retries++;
+            printf("[CLIENT WARNING] Timeout reached without server response. Retrying execution sequence (%d/%d)...\n", retries, MAX_RETRIES);
+        }
+    }
+    return false;
+}
+
+int main() {
+    int sockfd;
+    struct sockaddr_in serv_addr;
+    char location[MAX_LOC_STR];
+    uint32_t current_seq = 1;
+
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("Socket creation collapsed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Configure application-level socket timeout constraints
+    struct timeval tv;
+    tv.tv_sec = TIMEOUT_SEC;
+    tv.tv_usec = 0;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        perror("Error applying socket timeout configurations");
+        exit(EXIT_FAILURE);
+    }
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(SERVER_PORT);
+    inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr);
+
+    printf("=== Weather Telemetry Station Client Node ===\n");
+    printf("Enter Station Location Identifier Name (e.g., Chennai, Mumbai): ");
+    scanf(" %[^\n]s", location);
+
+    int choice;
+    while (1) {
+        printf("\nSelect Transmission Mode Action:\n");
+        printf("1. Send Current Simulated Weather Update\n");
+        printf("2. Query Running Averages from Server\n");
+        printf("3. Shut Down Client Node\n");
+        printf("Choice: ");
+        if (scanf("%d", &choice) != 1) break;
+
+        if (choice == 3) break;
+
+        WeatherPacket pkt;
+        memset(&pkt, 0, sizeof(WeatherPacket));
+        strcpy(pkt.location, location);
+
+        if (choice == 1) {
+            pkt.type = PKT_DATA;
+            pkt.seq_num = current_seq++;
+            
+            // Seed random values to simulate sensor arrays
+            pkt.data.temperature = 25.0f + (rand() % 1500 / 100.0f); // 25.0 to 40.0
+            pkt.data.humidity = 60.0f + (rand() % 3000 / 100.0f);    // 60.0 to 90.0
+            pkt.data.pressure = 1008.0f + (rand() % 10);
+            pkt.data.wind_speed = 5.0f + (rand() % 15);
+
+            printf("[CLIENT LOG] Packing current telemetry data values: Temp=%.1f, Hum=%.1f\n", 
+                   pkt.data.temperature, pkt.data.humidity);
+
+            if (!send_packet_reliably(sockfd, &serv_addr, &pkt)) {
+                printf("[CLIENT FATAL] Packet transmission failed after max retries. Server may be down.\n");
+            }
+        } 
+        else if (choice == 2) {
+            pkt.type = PKT_QUERY;
+            if (!send_packet_reliably(sockfd, &serv_addr, &pkt)) {
+                printf("[CLIENT FATAL] Query failed. Could not communicate with server.\n");
+            }
+        }
+    }
+
+    close(sockfd);
+    return 0;
+}
