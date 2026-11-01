@@ -1,0 +1,42 @@
+#ifndef HOTEL_PROTOCOL_H
+#define HOTEL_PROTOCOL_H
+
+#define SERVER_PORT 9292
+#define SERVER_IP "127.0.0.1"
+#define MAX_STR 64
+#define MAX_ROOMS 10
+
+// Command Operations
+typedef enum {
+    CMD_VIEW_ROOMS = 1,
+    CMD_BOOK_ROOM,
+    CMD_CANCEL_ROOM,
+    CMD_CHECK_DETAILS,
+    CMD_EXIT
+} CommandType;
+
+// Room Database Model
+typedef struct {
+    int room_number;
+    char room_type[MAX_STR]; // e.g., "Deluxe Suite", "Standard Double"
+    int price_per_night;
+    bool is_booked;
+    int guest_id;            // ID of borrower, 0 if empty
+} Room;
+
+// Structural Request Payload Packet
+typedef struct {
+    CommandType cmd;
+    int guest_id;
+    int target_room_number;
+} HotelRequest;
+
+// Structural Response Payload Packet
+typedef struct {
+    bool success;
+    char message[256];
+    int room_count;
+    Room rooms[MAX_ROOMS];
+} HotelResponse;
+
+#endif
