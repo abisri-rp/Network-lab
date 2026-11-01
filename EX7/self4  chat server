@@ -1,0 +1,177 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <arpa/inet.h>
+#include "chat_protocol.h"
+
+// Array tracking socket file descriptors of all active chat users
+int client_sockets[MAX_CLIENTS];
+int client_count = 0;
+
+// Mutex to protect critical sections (modifying client lists and broadcasting)
+pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Broadcast a message to all connected clients except the sender
+void broadcast_message(const char *message, int sender_fd) {
+    pthread_mutex_lock(&clients_mutex);
+    
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (client_sockets[i] != 0 && client_sockets[i] != sender_fd) {
+            // Send the raw data stream down the TCP socket pipe
+            if (send(client_sockets[i], message, strlen(message), 0) < 0) {
+                perror("[SERVER ERROR] Broadcast transmission failed");
+            }
+        }
+    }
+    
+    pthread_mutex_unlock(&clients_mutex);
+}
+
+// Add a newly accepted connection socket to the active directory tracking array
+void add_client(int socket_fd) {
+    pthread_mutex_lock(&clients_mutex);
+    
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (client_sockets[i] == 0) {
+            client_sockets[i] = socket_fd;
+            client_count++;
+            break;
+        }
+    }
+    
+    pthread_mutex_unlock(&clients_mutex);
+}
+
+// Remove a disconnected client socket from the tracking matrix safely
+void remove_client(int socket_fd) {
+    pthread_mutex_lock(&clients_mutex);
+    
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (client_sockets[i] == socket_fd) {
+            client_sockets[i] = 0;
+            client_count--;
+            break;
+        }
+    }
+    
+    pthread_mutex_unlock(&clients_mutex);
+}
+
+// Concurrent worker thread entry routine for individual client session lifecycles
+void *client_handler(void *arg) {
+    int client_fd = *((int *)arg);
+    free(arg); // Deallocate parameter wrapper context passed down from main look aheads
+
+    char buffer[BUFFER_SIZE];
+    char broadcast_buf[BUFFER_SIZE + 64];
+    char username[64];
+
+    // Read the initial stream payload containing client username identifier configuration
+    int valread = recv(client_fd, username, sizeof(username) - 1, 0);
+    if (valread <= 0) {
+        close(client_fd);
+        return NULL;
+    }
+    username[valread] = '\0';
+    username[strcspn(username, "\r\n")] = '\0'; // Clean newline characters
+
+    // Notify all other online users about the user joining
+    sprintf(broadcast_buf, ">>> User '%s' has entered the chat room. <<<\n", username);
+    printf("[SERVER LOG] %s", broadcast_buf);
+    broadcast_message(broadcast_buf, client_fd);
+
+    // Continuous message receiving loop block
+    while ((valread = recv(client_fd, buffer, sizeof(buffer) - 1, 0)) > 0) {
+        buffer[valread] = '\0';
+        
+        // Strip trailing terminal carriage returns if necessary
+        buffer[strcspn(buffer, "\r\n")] = '\0';
+
+        // Check for specific session break parameters
+        if (strcmp(buffer, "exit") == 0 || strlen(buffer) == 0) {
+            break;
+        }
+
+        // Format message standard payload mapping blocks
+        sprintf(broadcast_buf, "[%s]: %s\n", username, buffer);
+        printf("[CHAT] %s", broadcast_buf);
+        
+        // Push message across concurrent boundaries
+        broadcast_message(broadcast_buf, client_fd);
+    }
+
+    // Handle standard thread context disconnection cleanup routines
+    close(client_fd);
+    remove_client(client_fd);
+
+    sprintf(broadcast_buf, ">>> User '%s' has left the chat room. <<<\n", username);
+    printf("[SERVER LOG] %s", broadcast_buf);
+    broadcast_message(broadcast_buf, client_fd);
+
+    return NULL;
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in address;
+    int opt = 1;
+    int addrlen = sizeof(address);
+
+    // Clear tracking array allocations completely
+    memset(client_sockets, 0, sizeof(client_sockets));
+
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket allocation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror("setsockopt failure adjusting variables");
+        exit(EXIT_FAILURE);
+    }
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(SERVER_PORT);
+
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Bind infrastructure constraints failed");
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_fd, MAX_CLIENTS) < 0) {
+        perror("Listen assignment boundary sequence error");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("[CONCURRENT CHAT SERVER] Running on Port %d. Standing by for users...\n", SERVER_PORT);
+
+    while (1) {
+        if ((client_fd = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+            perror("Accept sequence connection drop matching exception");
+            continue;
+        }
+
+        add_client(client_fd);
+
+        int *p_client = malloc(sizeof(int));
+        *p_client = client_fd;
+
+        // Spawn independent worker thread to run in parallel
+        pthread_t thread_id;
+        if (pthread_create(&thread_id, NULL, client_handler, (void *)p_client) != 0) {
+            perror("Failed to spawn parallel client context worker instance");
+            close(client_fd);
+            remove_client(client_fd);
+            free(p_client);
+        } else {
+            // Detach thread to allow system automatic reference cleanup pools
+            pthread_detach(thread_id);
+        }
+    }
+
+    close(server_fd);
+    return 0;
+}
