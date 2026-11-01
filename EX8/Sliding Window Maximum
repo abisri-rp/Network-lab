@@ -1,0 +1,79 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+/**
+ * Returns a dynamically allocated array of size n containing the riddle answers.
+ * Note: The caller is responsible for freeing the returned array.
+ */
+long* riddle(long* arr, int n, int* resultSize) {
+    // 1. Allocate memory for left bounds, right bounds, and stack
+    int* left = (int*)malloc(n * sizeof(int));
+    int* right = (int*)malloc(n * sizeof(int));
+    int* stack = (int*)malloc(n * sizeof(int));
+    
+    // Set initial default boundaries
+    for (int i = 0; i < n; i++) {
+        left[i] = -1;
+        right[i] = n;
+    }
+
+    int top = -1; // Stack pointer (-1 means empty)
+
+    // 2. Compute Left boundaries (First smaller element to the left)
+    for (int i = 0; i < n; i++) {
+        while (top >= 0 && arr[stack[top]] >= arr[i]) {
+            top--;
+        }
+        if (top >= 0) {
+            left[i] = stack[top];
+        }
+        stack[++top] = i; // Push current index
+    }
+
+    top = -1; // Reset stack for next pass
+
+    // 3. Compute Right boundaries (First smaller element to the right)
+    for (int i = n - 1; i >= 0; i--) {
+        while (top >= 0 && arr[stack[top]] >= arr[i]) {
+            top--;
+        }
+        if (top >= 0) {
+            right[i] = stack[top];
+        }
+        stack[++top] = i; // Push current index
+    }
+
+    // 4. Map window lengths to maximum values
+    // Allocation size is n + 1 to comfortably map window sizes 1 through n
+    long* ans = (long*)calloc((n + 1), sizeof(long));
+    for (int i = 0; i < n; i++) {
+        int len = right[i] - left[i] - 1;
+        if (arr[i] > ans[len]) {
+            ans[len] = arr[i];
+        }
+    }
+
+    // 5. Pass maximum values backwards to cover smaller sub-ranges
+    for (int i = n - 1; i >= 1; i--) {
+        if (ans[i + 1] > ans[i]) {
+            ans[i] = ans[i + 1];
+        }
+    }
+
+    // 6. Shift answers into a 0-indexed return array (window size 1 map to index 0)
+    long* res = (long*)malloc(n * sizeof(long));
+    for (int i = 1; i <= n; i++) {
+        res[i - 1] = ans[i];
+    }
+
+    // Set the output array size for the caller structure
+    *resultSize = n;
+
+    // Clean up temporary stack configurations
+    free(left);
+    free(right);
+    free(stack);
+    free(ans);
+
+    return res;
+}
