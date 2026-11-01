@@ -1,0 +1,144 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include "weather_protocol.h"
+
+#define MAX_LOCATIONS 10
+
+// Database structures to hold metrics in memory
+typedef struct {
+    char location[MAX_LOC_STR];
+    WeatherData latest;
+    WeatherData running_sum;
+    uint32_t total_packets_received;
+    uint32_t last_seen_seq;
+    bool initialized;
+} LocationStats;
+
+LocationStats db[MAX_LOCATIONS];
+int location_count = 0;
+
+// Updates running averages inside the in-memory tracker
+void update_statistics(const WeatherPacket* pkt) {
+    int idx = -1;
+    
+    // Search for existing location record
+    for (int i = 0; i < location_count; i++) {
+        if (strcmp(db[i].location, pkt->location) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    
+    // If it's a brand new location, register it
+    if (idx == -1 && location_count < MAX_LOCATIONS) {
+        idx = location_count++;
+        strcpy(db[idx].location, pkt->location);
+        db[idx].initialized = true;
+    }
+    
+    if (idx != -1) {
+        // Detect out-of-order or duplicate packets using sequence checking
+        if (db[idx].total_packets_received > 0 && pkt->seq_num <= db[idx].last_seen_seq) {
+            printf("[SERVER WARNING] Duplicate or old packet detected (Seq: %u) for %s. Dropping data processing.\n", pkt->seq_num, pkt->location);
+            return; 
+        }
+        
+        // Detect missing packets gap anomaly
+        if (db[idx].total_packets_received > 0 && pkt->seq_num > db[idx].last_seen_seq + 1) {
+            printf("[SERVER WARNING] Gap detected! Missing %u packet(s) from %s.\n", (pkt->seq_num - db[idx].last_seen_seq - 1), pkt->location);
+        }
+
+        db[idx].latest = pkt->data;
+        db[idx].running_sum.temperature += pkt->data.temperature;
+        db[idx].running_sum.humidity += pkt->data.humidity;
+        db[idx].running_sum.pressure += pkt->data.pressure;
+        db[idx].running_sum.wind_speed += pkt->data.wind_speed;
+        db[idx].total_packets_received++;
+        db[idx].last_seen_seq = pkt->seq_num;
+
+        printf("[SERVER LOG] Updated metrics for %s (Seq: %u). Total packets: %u\n", 
+               pkt->location, pkt->seq_num, db[idx].total_packets_received);
+    }
+}
+
+// Fetches the averaged metrics for a location query response
+bool get_averages(const char* location, WeatherData* out_avg) {
+    for (int i = 0; i < location_count; i++) {
+        if (strcmp(db[i].location, location) == 0) {
+            uint32_t count = db[i].total_packets_received;
+            out_avg->temperature = db[i].running_sum.temperature / count;
+            out_avg->humidity = db[i].running_sum.humidity / count;
+            out_avg->pressure = db[i].running_sum.pressure / count;
+            out_avg->wind_speed = db[i].running_sum.wind_speed / count;
+            return true;
+        }
+    }
+    return false;
+}
+
+int main() {
+    int sockfd;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    WeatherPacket rx_packet, tx_packet;
+
+    memset(db, 0, sizeof(db));
+
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(SERVER_PORT);
+
+    if (bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("[UDP SERVER] Weather Monitoring Hub running on Port %d...\n", SERVER_PORT);
+
+    while (1) {
+        int bytes_received = recvfrom(sockfd, &rx_packet, sizeof(WeatherPacket), 0, 
+                                      (struct sockaddr *)&client_addr, &addr_len);
+        if (bytes_received < 0) continue;
+
+        memset(&tx_packet, 0, sizeof(WeatherPacket));
+
+        if (rx_packet.type == PKT_DATA) {
+            // Process the inbound telemetry data
+            update_statistics(&rx_packet);
+
+            // Construct and fire back an immediate ACK package response
+            tx_packet.type = PKT_ACK;
+            tx_packet.seq_num = rx_packet.seq_num;
+            strcpy(tx_packet.location, rx_packet.location);
+            
+            sendto(sockfd, &tx_packet, sizeof(WeatherPacket), 0, (struct sockaddr *)&client_addr, addr_len);
+        } 
+        else if (rx_packet.type == PKT_QUERY) {
+            printf("[SERVER QUERY] Received statistics query request for location: %s\n", rx_packet.location);
+            
+            tx_packet.type = PKT_QUERY_RESP;
+            strcpy(tx_packet.location, rx_packet.location);
+            
+            // Calculate and map analytical mathematical metrics over raw records
+            if (get_averages(rx_packet.location, &tx_packet.data)) {
+                tx_packet.status = true;
+            } else {
+                tx_packet.status = false; // Location not tracked yet
+            }
+
+            sendto(sockfd, &tx_packet, sizeof(WeatherPacket), 0, (struct sockaddr *)&client_addr, addr_len);
+        }
+    }
+
+    close(sockfd);
+    return 0;
+}
