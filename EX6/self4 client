@@ -1,0 +1,262 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <ctype.h>
+#include <arpa/inet.h>
+#include "library_protocol.h"
+
+#define CATALOG_DB "library_catalog.dat"
+
+// Helper function to perform case-insensitive substring matching
+bool contains_substring(const char *source, const char *pattern) {
+    if (!source || !pattern) return false;
+    if (strlen(pattern) == 0) return true;
+    
+    char src_lower[MAX_STR], pat_lower[MAX_STR];
+    int i;
+    for (i = 0; source[i] && i < MAX_STR - 1; i++) src_lower[i] = tolower((unsigned char)source[i]);
+    src_lower[i] = '\0';
+    for (i = 0; pattern[i] && i < MAX_STR - 1; i++) pat_lower[i] = tolower((unsigned char)pattern[i]);
+    pat_lower[i] = '\0';
+    
+    return strstr(src_lower, pat_lower) != NULL;
+}
+
+// Seed catalog file with a foundational set of books if it doesn't exist
+void initialize_catalog() {
+    FILE *file = fopen(CATALOG_DB, "rb");
+    if (file) {
+        fclose(file);
+        return; 
+    }
+    
+    file = fopen(CATALOG_DB, "wb");
+    if (!file) return;
+    
+    Book catalog[MAX_BOOKS] = {
+        {1001, "The C Programming Language", "Kernighan & Ritchie", "Computer Science", true, 0},
+        {1002, "Introduction to Algorithms", "Cormen", "Computer Science", true, 0},
+        {1003, "A Brief History of Time", "Stephen Hawking", "Physics", true, 0},
+        {1004, "Calculus Early Transcendentals", "James Stewart", "Mathematics", true, 0},
+        {1005, "Clean Code", "Robert C. Martin", "Software Engineering", true, 0}
+    };
+    fwrite(catalog, sizeof(Book), MAX_BOOKS, file);
+    fclose(file);
+}
+
+// Core library rules processing engine
+void process_library_transaction(LibraryRequest *req, LibraryResponse *res) {
+    memset(res, 0, sizeof(LibraryResponse));
+    
+    FILE *file = fopen(CATALOG_DB, "rb+");
+    if (!file) {
+        res->success = false;
+        strcpy(res->message, "Error: Library records database offline.");
+        return;
+    }
+    
+    Book catalog[MAX_BOOKS];
+    fread(catalog, sizeof(Book), MAX_BOOKS, file);
+    
+    switch (req->cmd) {
+        case CMD_SEARCH_TITLE: {
+            int count = 0;
+            for (int i = 0; i < MAX_BOOKS; i++) {
+                if (contains_substring(catalog[i].title, req->search_query)) {
+                    catalog[i].issued_to_student_id = 0; // Mask private borrower IDs out of general search
+                    res->book_results[count++] = catalog[i];
+                }
+            }
+            res->success = true;
+            res->match_count = count;
+            sprintf(res->message, "Found %d matches for title search.", count);
+            break;
+        }
+        
+        case CMD_SEARCH_AUTHOR: {
+            int count = 0;
+            for (int i = 0; i < MAX_BOOKS; i++) {
+                if (contains_substring(catalog[i].author, req->search_query)) {
+                    catalog[i].issued_to_student_id = 0; // Mask borrower profiles from basic discovery
+                    res->book_results[count++] = catalog[i];
+                }
+            }
+            res->success = true;
+            res->match_count = count;
+            sprintf(res->message, "Found %d matches for author search.", count);
+            break;
+        }
+        
+        case CMD_CHECK_AVAILABILITY: {
+            bool found = false;
+            for (int i = 0; i < MAX_BOOKS; i++) {
+                if (catalog[i].book_id == req->target_book_id) {
+                    found = true;
+                    res->success = true;
+                    res->match_count = 1;
+                    catalog[i].issued_to_student_id = 0; // Data isolation
+                    res->book_results[0] = catalog[i];
+                    if (catalog[i].is_available) {
+                        strcpy(res->message, "Book is available for checkout.");
+                    } else {
+                        strcpy(res->message, "Book is currently checked out by another student.");
+                    }
+                    break;
+                }
+            }
+            if (!found) {
+                res->success = false;
+                strcpy(res->message, "Error: Book ID unrecognized.");
+            }
+            break;
+        }
+        
+        case CMD_ISSUE_BOOK: {
+            if (req->student_id <= 0) {
+                res->success = false;
+                strcpy(res->message, "Validation Failed: Invalid Student ID layout.");
+                break;
+            }
+            bool found = false;
+            for (int i = 0; i < MAX_BOOKS; i++) {
+                if (catalog[i].book_id == req->target_book_id) {
+                    found = true;
+                    if (!catalog[i].is_available) {
+                        res->success = false;
+                        strcpy(res->message, "Checkout Denied: Book is already issued elsewhere.");
+                    } else {
+                        catalog[i].is_available = false;
+                        catalog[i].issued_to_student_id = req->student_id;
+                        
+                        fseek(file, 0, SEEK_SET);
+                        fwrite(catalog, sizeof(Book), MAX_BOOKS, file);
+                        
+                        res->success = true;
+                        sprintf(res->message, "Success: '%s' has been successfully checked out.", catalog[i].title);
+                    }
+                    break;
+                }
+            }
+            if (!found) {
+                res->success = false;
+                strcpy(res->message, "Checkout Failed: Targeted Book ID missing.");
+            }
+            break;
+        }
+        
+        case CMD_RETURN_BOOK: {
+            bool found = false;
+            for (int i = 0; i < MAX_BOOKS; i++) {
+                if (catalog[i].book_id == req->target_book_id) {
+                    found = true;
+                    if (catalog[i].is_available) {
+                        res->success = false;
+                        strcpy(res->message, "Processing Error: Book is already sitting inside inventory.");
+                    } else if (catalog[i].issued_to_student_id != req->student_id) {
+                        res->success = false;
+                        strcpy(res->message, "Processing Error: Return denied. Mismatch in checkout profile records.");
+                    } else {
+                        catalog[i].is_available = true;
+                        catalog[i].issued_to_student_id = 0;
+                        
+                        fseek(file, 0, SEEK_SET);
+                        fwrite(catalog, sizeof(Book), MAX_BOOKS, file);
+                        
+                        res->success = true;
+                        sprintf(res->message, "Success: '%s' received and cataloged back into inventory.", catalog[i].title);
+                    }
+                    break;
+                }
+            }
+            if (!found) {
+                res->success = false;
+                strcpy(res->message, "Processing Error: Target Book ID could not be resolved.");
+            }
+            break;
+        }
+        
+        case CMD_VIEW_ISSUED: {
+            int count = 0;
+            for (int i = 0; i < MAX_BOOKS; i++) {
+                if (!catalog[i].is_available && catalog[i].issued_to_student_id == req->student_id) {
+                    res->book_results[count++] = catalog[i];
+                }
+            }
+            res->success = true;
+            res->match_count = count;
+            sprintf(res->message, "Retrieved %d active historical book checkouts under your profile.", count);
+            break;
+        }
+        
+        default:
+            res->success = false;
+            strcpy(res->message, "Validation Failed: Invalid network operation parameters.");
+            break;
+    }
+    fclose(file);
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in address;
+    int opt = 1;
+    int addrlen = sizeof(address);
+    
+    initialize_catalog();
+    
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket system instantiation failed");
+        exit(EXIT_FAILURE);
+    }
+    
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror("setsockopt parameters modification failed");
+        exit(EXIT_FAILURE);
+    }
+    
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(SERVER_PORT);
+    
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        perror("Socket bind mapping failure");
+        exit(EXIT_FAILURE);
+    }
+    
+    if (listen(server_fd, 5) < 0) {
+        perror("Listen state declaration failed");
+        exit(EXIT_FAILURE);
+    }
+    
+    printf("[ITERATIVE LIBRARY SERVER] Listening on Port %d. Processing one user at a time...\n", SERVER_PORT);
+    
+    while (1) {
+        printf("[SERVER] Ready for next client in line... Awaiting accept call.\n");
+        if ((client_fd = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+            perror("Accept handshaking failed");
+            continue;
+        }
+        
+        char client_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &address.sin_addr, client_ip, INET_ADDRSTRLEN);
+        printf("[SERVER] Active Session Lock acquired for Client: %s\n", client_ip);
+        
+        LibraryRequest req;
+        LibraryResponse res;
+        
+        // Loop forces iterative focus, completely exhausting this channel before dropping it
+        while (recv(client_fd, &req, sizeof(LibraryRequest), 0) > 0) {
+            if (req.cmd == CMD_EXIT) {
+                printf("[SERVER] Client %s requested exit payload routing.\n", client_ip);
+                break;
+            }
+            process_library_transaction(&req, &res);
+            send(client_fd, &res, sizeof(LibraryResponse), 0);
+        }
+        
+        close(client_fd);
+        printf("[SERVER] Session lock released for Client: %s. Connection terminated gracefully.\n\n", client_ip);
+    }
+    
