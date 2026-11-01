@@ -1,0 +1,46 @@
+#ifndef LIBRARY_PROTOCOL_H
+#define LIBRARY_PROTOCOL_H
+
+#define SERVER_PORT 9191
+#define SERVER_IP "127.0.0.1"
+#define MAX_STR 64
+#define MAX_BOOKS 5
+
+// Client Command Identifiers
+typedef enum {
+    CMD_SEARCH_TITLE = 1,
+    CMD_SEARCH_AUTHOR,
+    CMD_CHECK_AVAILABILITY,
+    CMD_ISSUE_BOOK,
+    CMD_RETURN_BOOK,
+    CMD_VIEW_ISSUED,
+    CMD_EXIT
+} CommandType;
+
+// Book Schema Data Model
+typedef struct {
+    int book_id;
+    char title[MAX_STR];
+    char author[MAX_STR];
+    char category[MAX_STR];
+    bool is_available;
+    int issued_to_student_id; // Stores student ID if borrowed, 0 otherwise
+} Book;
+
+// Fixed Transfer Request Packet
+typedef struct {
+    CommandType cmd;
+    int student_id;
+    int target_book_id;
+    char search_query[MAX_STR];
+} LibraryRequest;
+
+// Fixed Transfer Response Packet
+typedef struct {
+    bool success;
+    char message[128];
+    int match_count;
+    Book book_results[MAX_BOOKS]; // Result array for query processing
+} LibraryResponse;
+
+#endif
