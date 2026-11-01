@@ -1,0 +1,78 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include "student_protocol.h"
+
+int main() {
+    int sockfd;
+    struct sockaddr_in serv_addr;
+    socklen_t addr_len = sizeof(serv_addr);
+    LookupRequest req;
+    LookupResponse res;
+
+    // 1. Instantiate the datagram UDP socket framework
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("Socket allocation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(SERVER_PORT);
+    if (inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr) <= 0) {
+        printf("\n Invalid target execution address standard \n");
+        close(sockfd);
+        return -1;
+    }
+
+    printf("=== Connectionless Student Registry Lookup Tool ===\n");
+    printf("Connected over UDP to Hub destination address %s:%d\n", SERVER_IP, SERVER_PORT);
+
+    while (1) {
+        printf("\nEnter Student Registration Number to lookup (Type 0 to exit): ");
+        if (scanf("%d", &req.target_reg_no) != 1) {
+            printf("Invalid entry type. Please enter a valid integer code number.\n");
+            // Clear input stream buffer space anomalies
+            while (getchar() != '\n');
+            continue;
+        }
+
+        if (req.target_reg_no == 0) {
+            printf("Closing client node interface. Goodbye.\n");
+            break;
+        }
+
+        // 2. Transmit the lookup packet over the wire
+        sendto(sockfd, &req, sizeof(LookupRequest), 0, (const struct sockaddr *)&serv_addr, sizeof(serv_addr));
+        printf("[CLIENT] Request datagram pushed. Awaiting response payload...\n");
+
+        // 3. Receive the outcome package mapping layout blocks
+        memset(&res, 0, sizeof(LookupResponse));
+        int bytes_received = recvfrom(sockfd, &res, sizeof(LookupResponse), 0, 
+                                      (struct sockaddr *)&serv_addr, &addr_len);
+        
+        if (bytes_received < 0) {
+            printf("[CLIENT ERROR] Network timeout or packet drop anomaly encountered.\n");
+            continue;
+        }
+
+        // 4. Render output results appropriately
+        if (res.found) {
+            printf("\n-----------------------------------------------\n");
+            printf(" Student Record Located Successfully:\n");
+            printf(" -> Register No : %d\n", res.student_details.reg_no);
+            printf(" -> Name        : %s\n", res.student_details.name);
+            printf(" -> Department  : %s\n", res.student_details.dept);
+            printf(" -> Semester    : %d\n", res.student_details.semester);
+            printf(" -> CGPA Metric : %.2f / 10.00\n", res.student_details.cgpa);
+            printf("-----------------------------------------------\n");
+        } else {
+            printf("\n[SERVER REJECTION RESULT] %s\n", res.error_message);
+        }
+    }
+
+    close(sockfd);
+    return 0;
+}
