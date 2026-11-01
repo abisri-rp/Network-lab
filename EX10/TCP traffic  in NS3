@@ -1,0 +1,27 @@
+import matplotlib.pyplot as plt
+
+time_steps = []
+cwnd_values = []
+
+# Parse the generated NS-3 dat file records
+try:
+    with open("cwnd-variation.dat", "r") as file:
+        for line in file:
+            parts = line.strip().split("\t")
+            if len(parts) == 2:
+                time_steps.append(float(parts[0]))
+                cwnd_values.append(int(parts[1]) / 1024) # Normalize bytes to Kilobytes mapping metrics
+except FileNotFoundError:
+    print("Error: cwnd-variation.dat file not found. Ensure the NS-3 simulation ran correctly.")
+    exit(1)
+
+plt.figure(figsize=(10, 5))
+plt.plot(time_steps, cwnd_values, label="TCP NewReno Cwnd Evolution", color="crimson", linewidth=2)
+plt.title("TCP Congestion Window (cwnd) Variation Over Time")
+plt.xlabel("Simulation Timestamp (Seconds)")
+plt.ylabel("Congestion Window Capacity Size (KB)")
+plt.grid(True, linestyle="--", alpha=0.6)
+plt.legend()
+plt.savefig("tcp_cwnd_performance.png")
+print("[SUCCESS] Output chart visualization generated as 'tcp_cwnd_performance.png'")
+plt.show()
